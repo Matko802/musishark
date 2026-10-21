@@ -1,8 +1,5 @@
 <div align="center">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/icons/hicolor/512x512/apps/io.github.matko802.Musishark-dark.png" />
-  <img height="150" src="assets/icons/hicolor/512x512/apps/io.github.matko802.Musishark-light.png" />
-</picture>
+<img height="150" src="assets/icons/hicolor/512x512/apps/io.github.matko802.Musishark.png" />
 
 <h3 style="font-size: 30px"> Musishark </h3>
 

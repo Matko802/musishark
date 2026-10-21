@@ -53,8 +53,6 @@ modules:
       - install -Dm644 io.github.matko802.Musishark.desktop ${FLATPAK_DEST}/share/applications/io.github.matko802.Musishark.desktop
       - install -Dm644 io.github.matko802.Musishark.metainfo.xml ${FLATPAK_DEST}/share/metainfo/io.github.matko802.Musishark.metainfo.xml
       - install -Dm644 assets/icons/hicolor/512x512/apps/io.github.matko802.Musishark.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.matko802.Musishark.png
-      - install -Dm644 assets/icons/hicolor/512x512/apps/io.github.matko802.Musishark-dark.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.matko802.Musishark-dark.png
-      - install -Dm644 assets/icons/hicolor/512x512/apps/io.github.matko802.Musishark-light.png ${FLATPAK_DEST}/share/icons/hicolor/512x512/apps/io.github.matko802.Musishark-light.png
       - install -Dm644 assets/icons/hicolor/symbolic/apps/io.github.matko802.Musishark-symbolic.svg ${FLATPAK_DEST}/share/icons/hicolor/symbolic/apps/io.github.matko802.Musishark-symbolic.svg
     sources:
       - type: dir

@@ -1,11 +1,6 @@
 
 pub fn app_icon_name() -> String {
-    let variant = if adw::StyleManager::default().is_dark() {
-        "dark"
-    } else {
-        "light"
-    };
-    format!("{}-{variant}", crate::APP_ID)
+    crate::APP_ID.to_owned()
 }
 
 use std::cell::{Cell, RefCell};
