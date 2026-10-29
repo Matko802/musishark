@@ -500,11 +500,12 @@ impl PlayerBar {
 
         let (child, icon, sensitive, scale_sensitive) = match status {
             PlaybackStatus::Loading => ("spinner", "media-playback-start-symbolic", false, false),
-            PlaybackStatus::Playing if live => ("icon", "media-playback-pause-symbolic", true, false),
-            PlaybackStatus::Playing if duration <= 0.0 => {
-                ("spinner", "media-playback-pause-symbolic", false, false)
-            }
-            PlaybackStatus::Playing => ("icon", "media-playback-pause-symbolic", true, true),
+            PlaybackStatus::Playing => (
+                "icon",
+                "media-playback-pause-symbolic",
+                true,
+                duration > 0.0 && !live,
+            ),
             PlaybackStatus::Paused => (
                 "icon",
                 "media-playback-start-symbolic",

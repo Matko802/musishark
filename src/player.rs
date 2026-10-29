@@ -687,10 +687,6 @@ impl Player {
             };
             match result {
                 Ok(info) => {
-                    // The bars show LIVE from the stream itself, so a queue entry that did not know still gets it.
-                    if !arm_only && crate::audio::is_live_uri(&info.uri) {
-                        player.state.set_live(true);
-                    }
                     *player.loaded.borrow_mut() = Some(info.clone());
                     if !info.from_cache {
                         player.refine_metadata(
@@ -699,6 +695,10 @@ impl Player {
                             info.uploader.as_deref(),
                             info.thumbnail.as_deref(),
                         );
+                    }
+                    // The bars show LIVE from the stream itself, so a queue entry that did not know still gets it.
+                    if !arm_only && crate::audio::is_live_uri(&info.uri) {
+                        player.state.set_live(true);
                     }
                     player.audio.send(AudioCommand::Load {
                         uri: info.uri,

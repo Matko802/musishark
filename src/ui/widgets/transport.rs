@@ -125,8 +125,6 @@ impl Transport {
         let duration = state.duration();
         let (child, icon, sensitive) = match status {
             PlaybackStatus::Loading => ("spinner", "media-playback-start-symbolic", false),
-            PlaybackStatus::Playing if state.live() => ("icon", "media-playback-pause-symbolic", true),
-            PlaybackStatus::Playing if duration <= 0.0 => ("spinner", "media-playback-pause-symbolic", false),
             PlaybackStatus::Playing => ("icon", "media-playback-pause-symbolic", true),
             PlaybackStatus::Paused => ("icon", "media-playback-start-symbolic", true),
             PlaybackStatus::Stopped => ("icon", "media-playback-start-symbolic", state.queue_length() > 0),
