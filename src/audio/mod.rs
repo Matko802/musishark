@@ -524,6 +524,7 @@ fn cubic_volume(playbin: &gst::Element) -> f64 {
         .dynamic_cast_ref::<gst_audio::StreamVolume>()
         .map(|sv| sv.volume(gst_audio::StreamVolumeFormat::Cubic))
         .unwrap_or_else(|| playbin.property::<f64>("volume"))
+        .clamp(0.0, 1.0)
 }
 
 fn apply_http_auth(source: &gst::Element, auth: Option<&HttpAuth>) {
