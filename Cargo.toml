@@ -46,6 +46,9 @@ rustypipe-botguard = "0.1.2"
 libc = "0.2"
 mpris-server = { version = "0.10", features = ["tokio"] }
 
+[patch.crates-io]
+stacksafe-macro = { path = "vendor/stacksafe-macro" }
+
 [profile.dev]
 opt-level = 1
 debug = "line-tables-only"
