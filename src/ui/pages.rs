@@ -36,19 +36,7 @@ pub fn home(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         if section.items.is_empty() {
             continue;
         }
-        page = page.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .mb_4()
-                .text_xl()
-                .font_weight(FontWeight::BOLD)
-                .child(div().w(px(4.0)).h(px(20.0)).bg(theme.accent))
-                .child(section.title.clone()),
-        );
-        let strip = horizontal_strip(root, &section.items, 168.0, cx);
-        page = page.child(strip).child(div().h(px(24.0)));
+        page = page.child(shelf(root, &section.title, &section.items, 168.0, cx)).child(div().h(px(12.0)));
     }
     page.into_any_element()
 }
@@ -112,13 +100,70 @@ pub fn card(root: &mut Root, item: &MediaItem, size: f32, circular: bool, cx: &m
         )
 }
 
-pub fn horizontal_strip(root: &mut Root, items: &[MediaItem], size: f32, cx: &mut Context<Root>) -> AnyElement {
-    let key = items.first().map(|item| item.id.clone()).unwrap_or_else(|| "empty".to_owned());
-    let mut strip = div().id(gpui::SharedString::from(format!("strip-{key}-{}", size as u32))).flex().flex_row().gap_4().overflow_x_scroll().pb_2();
-    for item in items {
-        strip = strip.child(card(root, item, size, false, cx));
+pub fn shelf(root: &mut Root, title: &str, items: &[MediaItem], size: f32, cx: &mut Context<Root>) -> Div {
+    let theme = root.theme;
+    let available = (root.viewport_width - 64.0).max(size + 16.0);
+    let per_page = (((available + 16.0) / (size + 16.0)).floor() as usize).max(1);
+    let max_start = items.len().saturating_sub(per_page);
+    let key = format!("{title}|{}", items.first().map(|item| item.id.as_str()).unwrap_or(""));
+    let start = root.shelf_offsets.get(&key).copied().unwrap_or(0).min(max_start);
+    if root.shelf_offsets.get(&key).copied() != Some(start) {
+        root.shelf_offsets.insert(key.clone(), start);
     }
-    strip.into_any_element()
+
+    let mut header = div()
+        .flex()
+        .items_center()
+        .justify_between()
+        .mb_4()
+        .child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .text_xl()
+                .font_weight(FontWeight::BOLD)
+                .child(div().w(px(4.0)).h(px(20.0)).bg(theme.accent))
+                .child(title.to_owned()),
+        );
+    if items.len() > per_page {
+        let left_key = key.clone();
+        let right_key = key.clone();
+        let left_color = if start > 0 { theme.text } else { theme.border };
+        let right_color = if start < max_start { theme.text } else { theme.border };
+        header = header.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(
+                    shell::icon_button(assets::BACK, 15.0, left_color, theme.surface_hover).on_mouse_down(
+                        gpui::MouseButton::Left,
+                        shell::press(cx, move |root, _, _, cx| {
+                            let current = root.shelf_offsets.get(&left_key).copied().unwrap_or(0);
+                            root.shelf_offsets.insert(left_key.clone(), current.saturating_sub(per_page));
+                            cx.notify();
+                        }),
+                    ),
+                )
+                .child(
+                    shell::icon_button(assets::FORWARD, 15.0, right_color, theme.surface_hover).on_mouse_down(
+                        gpui::MouseButton::Left,
+                        shell::press(cx, move |root, _, _, cx| {
+                            let current = root.shelf_offsets.get(&right_key).copied().unwrap_or(0);
+                            root.shelf_offsets.insert(right_key.clone(), (current + per_page).min(max_start));
+                            cx.notify();
+                        }),
+                    ),
+                ),
+        );
+    }
+
+    let mut row = div().flex().flex_row().gap_4().overflow_hidden();
+    for item in items.iter().skip(start).take(per_page) {
+        row = row.child(card(root, item, size, false, cx));
+    }
+    div().flex().flex_col().child(header).child(row)
 }
 
 pub fn grid(root: &mut Root, items: &[MediaItem], columns: usize, size: f32, cx: &mut Context<Root>) -> Div {
@@ -355,16 +400,12 @@ pub fn explore(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         if items.is_empty() {
             continue;
         }
-        page = page.child(div().text_xl().font_weight(FontWeight::BOLD).mb_4().child(title));
-        let strip = horizontal_strip(root, &items, 168.0, cx);
-        page = page.child(strip).child(div().h(px(24.0)));
+        page = page.child(shelf(root, title, &items, 168.0, cx)).child(div().h(px(12.0)));
     }
 
     if let Some(charts) = &data.charts {
         if !charts.daily.is_empty() {
-            page = page.child(div().text_xl().font_weight(FontWeight::BOLD).mb_4().child("Charts"));
-            let strip = horizontal_strip(root, &charts.daily, 168.0, cx);
-            page = page.child(strip);
+            page = page.child(shelf(root, "Charts", &charts.daily, 168.0, cx));
         }
     }
     page.into_any_element()

@@ -25,6 +25,7 @@ pub const LYRICS: &str = "icons/lyrics.svg";
 pub const SETTINGS: &str = "icons/settings.svg";
 pub const REFRESH: &str = "icons/refresh.svg";
 pub const BACK: &str = "icons/back.svg";
+pub const FORWARD: &str = "icons/arrow-forward.svg";
 pub const HEART: &str = "icons/heart.svg";
 pub const HEART_FILLED: &str = "icons/heart-filled.svg";
 pub const COMPASS: &str = "icons/compass.svg";
@@ -33,6 +34,8 @@ pub const TRASH: &str = "icons/trash.svg";
 pub const CHECK: &str = "icons/check.svg";
 pub const ANTENNA: &str = "icons/antenna.svg";
 pub const EXTERNAL: &str = "icons/external.svg";
+pub const SHARE: &str = "icons/share.svg";
+pub const THUMB_DOWN: &str = "icons/thumb-down.svg";
 pub const SUN: &str = "icons/sun.svg";
 pub const MOON: &str = "icons/moon.svg";
 
@@ -63,6 +66,7 @@ fn bytes(path: &str) -> Option<&'static [u8]> {
         SETTINGS => include_bytes!("../../assets/icons/gpui/settings.svg"),
         REFRESH => include_bytes!("../../assets/icons/gpui/refresh.svg"),
         BACK => include_bytes!("../../assets/icons/gpui/back.svg"),
+        FORWARD => include_bytes!("../../assets/icons/gpui/arrow-forward.svg"),
         HEART => include_bytes!("../../assets/icons/gpui/heart.svg"),
         HEART_FILLED => include_bytes!("../../assets/icons/gpui/heart-filled.svg"),
         COMPASS => include_bytes!("../../assets/icons/gpui/compass.svg"),
@@ -71,6 +75,8 @@ fn bytes(path: &str) -> Option<&'static [u8]> {
         CHECK => include_bytes!("../../assets/icons/gpui/check.svg"),
         ANTENNA => include_bytes!("../../assets/icons/gpui/antenna.svg"),
         EXTERNAL => include_bytes!("../../assets/icons/gpui/external.svg"),
+        SHARE => include_bytes!("../../assets/icons/gpui/share.svg"),
+        THUMB_DOWN => include_bytes!("../../assets/icons/gpui/thumb-down.svg"),
         SUN => include_bytes!("../../assets/icons/gpui/sun.svg"),
         MOON => include_bytes!("../../assets/icons/gpui/moon.svg"),
         _ => return None,

@@ -6,6 +6,7 @@ use crate::model::{LikeStatus, Track, VideoId};
 use super::assets;
 use super::pages;
 use super::shell::{self, Load, PageKind, Root, format_duration, heading};
+use crate::net::search::SearchFilter;
 
 pub fn page(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     match &root.page {
@@ -122,7 +123,8 @@ fn playlist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                                 root.backend.downloads.queue_tracks(download.clone(), &album_title, &album_id);
                                 root.notice("Added to downloads");
                                 cx.notify();
-                            }))),
+                            })))
+                            .child(shell::icon_button(assets::SHARE, 18.0, theme.text, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| root.share_page(cx)))),
                     ),
             ),
     );
@@ -217,7 +219,8 @@ fn artist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                                     if let Some(id) = radio.clone() {
                                         root.backend.player.start_radio(None, Some(id));
                                     }
-                                }))),
+                                })))
+                                .child(shell::icon_button(assets::SHARE, 18.0, theme.text, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| root.share_page(cx)))),
                         ),
                 ),
         );
@@ -233,8 +236,7 @@ fn artist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
             if section.results.is_empty() {
                 continue;
             }
-            page = page.child(div().h(px(20.0))).child(heading(theme, label, None));
-            page = page.child(pages::horizontal_strip(root, &section.results, 168.0, cx));
+            page = page.child(div().h(px(20.0))).child(pages::shelf(root, label, &section.results, 168.0, cx));
         }
     }
     page.into_any_element()
@@ -290,7 +292,8 @@ fn search(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         .pt_5()
         .pb_8()
         .child(top_bar(root, "Search", cx))
-        .child(div().text_2xl().font_weight(FontWeight::BOLD).mb_6().child(format!("Results for \"{query}\"")));
+        .child(div().text_2xl().font_weight(FontWeight::BOLD).mb_4().child(format!("Results for \"{query}\"")))
+        .child(search_filters(root, cx));
     match &data {
         Load::Ready(results) => {
             if let Some(top) = &results.top_result {
@@ -334,6 +337,39 @@ fn search(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         Load::Idle => {}
     }
     page.into_any_element()
+}
+
+fn search_filters(root: &mut Root, cx: &mut Context<Root>) -> Div {
+    let theme = root.theme;
+    let current = root.search_filter;
+    let filters: [(&str, Option<SearchFilter>); 6] = [
+        ("All", None),
+        ("Songs", Some(SearchFilter::Songs)),
+        ("Videos", Some(SearchFilter::Videos)),
+        ("Albums", Some(SearchFilter::Albums)),
+        ("Artists", Some(SearchFilter::Artists)),
+        ("Playlists", Some(SearchFilter::Playlists)),
+    ];
+    let mut row = div().flex().flex_row().flex_wrap().gap_2().mb_5();
+    for (label, filter) in filters {
+        let selected = current == filter;
+        row = row.child(
+            div()
+                .px_3()
+                .py_2()
+                .border_1()
+                .border_color(if selected { theme.text } else { theme.border })
+                .bg(if selected { theme.text } else { theme.elevated })
+                .text_color(if selected { theme.on_accent } else { theme.muted })
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .cursor_pointer()
+                .when(!selected, move |el| el.hover(move |s| s.bg(theme.surface_hover)))
+                .on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| root.set_search_filter(filter, cx)))
+                .child(label),
+        );
+    }
+    row
 }
 
 fn history(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
@@ -384,6 +420,7 @@ pub fn track_row(root: &mut Root, tracks: &[Track], index: usize, track: &Track,
     let like = track.like_status;
     let liked = like == LikeStatus::Like;
     let video = track.video_id.clone();
+    let share_id = track.video_id.0.clone();
     let add = track.clone();
     div()
         .flex()
@@ -423,6 +460,9 @@ pub fn track_row(root: &mut Root, tracks: &[Track], index: usize, track: &Track,
             root.backend.player.add_to_queue(vec![add.clone()], false);
             root.notice("Added to queue");
             cx.notify();
+        })))
+        .child(shell::icon_button(assets::SHARE, 15.0, theme.muted, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| {
+            root.share_track(&share_id, cx);
         })))
 }
 

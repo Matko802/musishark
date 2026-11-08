@@ -1,6 +1,8 @@
 # Build output. target-prof is the frame-pointer build used for profiling.
 /target/
 /target-prof/
+/result
+/result-*
 
 # Captured InnerTube responses for the offline parser tests. They hold
 # account data, so they are recorded locally and never committed.

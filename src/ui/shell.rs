@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -8,7 +8,7 @@ use glib::prelude::*;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, Context, Div, FocusHandle, KeyDownEvent, Pixels, Render, RenderImage, Timer, Window, WindowBounds, WindowOptions, div, px, size, svg,
+    App, Application, Bounds, ClipboardItem, Context, Div, FocusHandle, KeyDownEvent, Pixels, Render, RenderImage, Timer, Window, WindowBounds, WindowOptions, div, px, size, svg,
 };
 
 use crate::App as Backend;
@@ -18,7 +18,7 @@ use crate::net::explore::{CategorySection, ExploreData};
 use crate::net::history::HistoryEntry;
 use crate::net::home::HomeSection;
 use crate::net::playlists::PlaylistDetails;
-use crate::net::search::SearchResults;
+use crate::net::search::{SearchFilter, SearchResults};
 
 use super::assets::{self, Assets};
 use super::detail;
@@ -90,6 +90,7 @@ pub struct Root {
     pub library: LibraryData,
     pub search_open: bool,
     pub search_text: String,
+    pub search_filter: Option<SearchFilter>,
     pub root_focus: FocusHandle,
     pub queue_open: bool,
     pub queue_generation: u64,
@@ -106,6 +107,9 @@ pub struct Root {
     pub notices: Rc<RefCell<Vec<String>>>,
     pub toast: Option<(String, Instant)>,
     pub covers: HashSet<String>,
+    pub shelf_offsets: HashMap<String, usize>,
+    pub viewport_width: f32,
+    pub lyrics: HashMap<String, Load<Option<crate::lyrics::LyricsResult>>>,
     pub progress_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub volume_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub raise_flag: Rc<Cell<bool>>,
@@ -203,6 +207,7 @@ impl Root {
             library: LibraryData { playlists: Load::Idle, albums: Load::Idle, artists: Load::Idle, history: Load::Idle },
             search_open: false,
             search_text: String::new(),
+            search_filter: None,
             root_focus,
             queue_open: false,
             queue_generation: 0,
@@ -216,6 +221,9 @@ impl Root {
             notices,
             toast: None,
             covers: HashSet::new(),
+            shelf_offsets: HashMap::new(),
+            viewport_width: 1040.0,
+            lyrics: HashMap::new(),
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             raise_flag: Rc::new(Cell::new(false)),
@@ -420,11 +428,35 @@ impl Root {
 
     pub fn open_search(&mut self, query: String, cx: &mut Context<Self>) {
         self.search_open = false;
+        self.search_filter = None;
+        self.load_search(query, None, cx);
+    }
+
+    pub fn set_search_filter(&mut self, filter: Option<SearchFilter>, cx: &mut Context<Self>) {
+        let query = match &self.page {
+            Some(PageKind::Search { query, .. }) => query.clone(),
+            _ => return,
+        };
+        self.load_search(query, filter, cx);
+    }
+
+    fn load_search(&mut self, query: String, filter: Option<SearchFilter>, cx: &mut Context<Self>) {
+        self.search_filter = filter;
         self.page = Some(PageKind::Search { query: query.clone(), data: Load::Loading });
         let api = self.backend.net.client().api();
         let net = self.backend.net.clone();
         cx.spawn(async move |this, cx| {
-            let result = net.spawn(async move { crate::net::search::search_all(api, query).await.map_err(|err| err.to_string()) }).await.ok().and_then(Result::ok);
+            let result = net
+                .spawn(async move {
+                    match filter {
+                        Some(filter) => crate::net::search::search(&*api, &query, Some(filter)).await,
+                        None => crate::net::search::search_all(api, query).await,
+                    }
+                    .map_err(|err| err.to_string())
+                })
+                .await
+                .ok()
+                .and_then(Result::ok);
             let _ = this.update(cx, |root, cx| {
                 if let Some(PageKind::Search { data, .. }) = root.page.as_mut() {
                     *data = result.map_or_else(|| Load::Failed("Search failed".to_owned()), Load::Ready);
@@ -455,6 +487,65 @@ impl Root {
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         cx.notify();
+    }
+
+    pub fn ensure_lyrics(&mut self, video_id: &str, title: &str, artist: &str, duration: f64, cx: &mut Context<Self>) {
+        if video_id.is_empty() || self.lyrics.contains_key(video_id) {
+            return;
+        }
+        self.lyrics.insert(video_id.to_owned(), Load::Loading);
+        let lyrics = self.backend.lyrics.clone();
+        let net = self.backend.net.clone();
+        let query = crate::lyrics::TrackQuery::new(video_id, Some(title), Some(artist), Some(duration as u32));
+        let id = video_id.to_owned();
+        cx.spawn(async move |this, cx| {
+            let result = net.spawn(async move { lyrics.get_lyrics(&query).await }).await.ok().flatten();
+            let _ = this.update(cx, |root, cx| {
+                root.lyrics.insert(id, Load::Ready(result));
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    pub fn copy_link(&mut self, url: String, cx: &mut Context<Self>) {
+        if url.is_empty() {
+            return;
+        }
+        cx.write_to_clipboard(ClipboardItem::new_string(url));
+        self.notice("Link copied to clipboard");
+        cx.notify();
+    }
+
+    pub fn share_track(&mut self, video_id: &str, cx: &mut Context<Self>) {
+        if video_id.is_empty() {
+            return;
+        }
+        self.copy_link(format!("https://music.youtube.com/watch?v={video_id}"), cx);
+    }
+
+    pub fn share_page(&mut self, cx: &mut Context<Self>) {
+        let url = match &self.page {
+            Some(PageKind::Playlist { id, album, data, .. }) => {
+                let audio_id = match data {
+                    Load::Ready(details) => details.audio_playlist_id.clone(),
+                    _ => None,
+                };
+                if id.starts_with("OLAK") || id.starts_with("MPSP") {
+                    format!("https://music.youtube.com/playlist?list={id}")
+                } else if *album || id.starts_with("MPRE") {
+                    match audio_id {
+                        Some(playlist) => format!("https://music.youtube.com/playlist?list={playlist}"),
+                        None => format!("https://music.youtube.com/browse/{id}"),
+                    }
+                } else {
+                    format!("https://music.youtube.com/playlist?list={id}")
+                }
+            }
+            Some(PageKind::Artist { id, .. }) if !id.is_empty() => format!("https://music.youtube.com/browse/{id}"),
+            _ => String::new(),
+        };
+        self.copy_link(url, cx);
     }
 
     pub fn go_back(&mut self, cx: &mut Context<Self>) {
@@ -820,6 +911,7 @@ impl Root {
 
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.viewport_width = window.viewport_size().width.into();
         let theme = self.theme;
         let content: gpui::AnyElement = match &self.page {
             Some(_) => detail::page(self, cx),

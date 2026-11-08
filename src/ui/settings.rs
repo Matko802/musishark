@@ -74,13 +74,16 @@ pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
         body.with_animation(
             gpui::SharedString::from(format!("settings-body-close-{generation}")),
             Animation::new(Duration::from_millis(180)).with_easing(gpui::ease_in_out),
-            |el, delta| el.relative().top(px(delta * 10.0)),
+            |el, delta| el.w(px(920.0 * (1.0 - 0.05 * delta))).h(px(640.0 * (1.0 - 0.05 * delta))),
         )
     } else {
         body.with_animation(
             gpui::SharedString::from(format!("settings-body-open-{generation}")),
             Animation::new(Duration::from_millis(340)).with_easing(shell::spring),
-            |el, delta| el.relative().top(px((1.0 - shell::spring(delta).clamp(0.0, 1.0)) * 14.0)),
+            |el, delta| {
+                let scale = 0.94 + 0.06 * shell::spring(delta).clamp(0.0, 1.0);
+                el.w(px(920.0 * scale)).h(px(640.0 * scale))
+            },
         )
     };
 
@@ -225,7 +228,7 @@ fn labels(theme: Theme, title: &str, _subtitle: Option<&str>) -> Div {
 }
 
 fn switch_indicator(theme: Theme, on: bool, id: &str) -> Div {
-    let knob = div().size(px(18.0)).bg(if on { theme.on_accent } else { theme.muted }).with_animation(
+    let knob = div().size(px(18.0)).bg(if on { theme.text } else { theme.muted }).with_animation(
         gpui::SharedString::from(format!("switch-{id}-{on}")),
         Animation::new(Duration::from_millis(320)).with_easing(shell::spring),
         move |el, delta| {

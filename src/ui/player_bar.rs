@@ -8,7 +8,7 @@ use gpui::{Animation, AnimationExt as _, Bounds, Context, Div, FontWeight, Mouse
 use crate::model::{LikeStatus, PlaybackStatus, RepeatMode, VideoId};
 
 use super::assets;
-use super::shell::{self, Root, format_time};
+use super::shell::{self, Load, Root, format_time};
 
 struct Now {
     status: PlaybackStatus,
@@ -53,6 +53,9 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
     let playing = info.status == PlaybackStatus::Playing;
     let like_icon = if info.like == LikeStatus::Like { assets::HEART_FILLED } else { assets::HEART };
     let like_color = if info.like == LikeStatus::Like { theme.accent } else { theme.muted };
+    let share_video = info.video_id.clone();
+    let dislike_video = info.video_id.clone();
+    let disliked = info.like == LikeStatus::Dislike;
 
     let left = div()
         .flex()
@@ -87,13 +90,23 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
                 }
                 cx.notify();
             })),
-        );
+        )
+        .child(shell::icon_button(assets::THUMB_DOWN, 15.0, if disliked { theme.accent } else { theme.muted }, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| {
+            if !dislike_video.is_empty() {
+                let next = if disliked { LikeStatus::Indifferent } else { LikeStatus::Dislike };
+                root.backend.player.set_like_status(VideoId(dislike_video.clone()), next);
+            }
+            cx.notify();
+        })))
+        .child(shell::icon_button(assets::SHARE, 16.0, theme.muted, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| {
+            root.share_track(&share_video, cx);
+        })));
 
     let fraction = if info.duration > 0.0 { (info.position / info.duration).clamp(0.0, 1.0) } else { 0.0 };
     let progress = progress_bar(
         root,
         fraction,
-        true,
+        "bar-progress",
         cx,
         move |root, value, cx| {
             let duration = root.backend.player.state().duration();
@@ -165,7 +178,7 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
     let volume = progress_bar(
         root,
         info.volume,
-        false,
+        "bar-volume",
         cx,
         move |root, value, cx| {
             root.backend.player.set_volume(value);
@@ -220,16 +233,21 @@ pub fn slider(
     root: &mut Root,
     bounds: Rc<Cell<Bounds<Pixels>>>,
     fraction: f64,
+    id: &'static str,
     cx: &mut Context<Root>,
     on_set: impl Fn(&mut Root, f64, &mut Context<Root>) + 'static,
 ) -> Div {
     let theme = root.theme;
     let fraction = fraction.clamp(0.0, 1.0) as f32;
     let handle = bounds.clone();
-    let hover_handle = bounds;
+    let click_bounds = bounds;
+    let group = gpui::SharedString::from(format!("slider-{id}"));
+    let track_group = group.clone();
+    let knob_group = group.clone();
     div()
+        .group(group)
         .relative()
-        .h(px(18.0))
+        .h(px(20.0))
         .w_full()
         .flex()
         .items_center()
@@ -237,7 +255,7 @@ pub fn slider(
         .on_mouse_down(
             MouseButton::Left,
             cx.listener(move |root, event: &MouseDownEvent, _, cx| {
-                let bounds = hover_handle.get();
+                let bounds = click_bounds.get();
                 let width: f32 = bounds.size.width.into();
                 if width > 0.0 {
                     let offset: f32 = (event.position.x - bounds.origin.x).into();
@@ -249,10 +267,28 @@ pub fn slider(
         .child(
             div()
                 .relative()
-                .h(px(4.0))
+                .h(px(5.0))
                 .w_full()
                 .bg(theme.border)
+                .group_hover(track_group, |mut style| {
+                    style.size.height = Some(px(9.0).into());
+                    style
+                })
                 .child(div().absolute().left_0().top_0().bottom_0().bg(theme.text).w(relative(fraction)))
+                .child(
+                    div()
+                        .absolute()
+                        .left(relative(fraction))
+                        .top(px(-3.5))
+                        .ml(px(-6.0))
+                        .size(px(12.0))
+                        .bg(theme.text)
+                        .opacity(0.0)
+                        .group_hover(knob_group, |mut style| {
+                            style.opacity = Some(1.0);
+                            style
+                        }),
+                )
                 .child(canvas(
                     move |bounds, _, _| {
                         handle.set(bounds);
@@ -262,9 +298,65 @@ pub fn slider(
         )
 }
 
-fn progress_bar(root: &mut Root, fraction: f64, is_progress: bool, cx: &mut Context<Root>, on_set: impl Fn(&mut Root, f64, &mut Context<Root>) + 'static) -> Div {
-    let bounds = if is_progress { root.progress_bounds.clone() } else { root.volume_bounds.clone() };
-    slider(root, bounds, fraction, cx, on_set)
+fn progress_bar(root: &mut Root, fraction: f64, id: &'static str, cx: &mut Context<Root>, on_set: impl Fn(&mut Root, f64, &mut Context<Root>) + 'static) -> Div {
+    let bounds = if id == "bar-progress" || id == "expanded-progress" { root.progress_bounds.clone() } else { root.volume_bounds.clone() };
+    slider(root, bounds, fraction, id, cx, on_set)
+}
+
+fn lyrics_content(root: &mut Root, info: &Now, cx: &mut Context<Root>) -> Div {
+    let theme = root.theme;
+    root.ensure_lyrics(&info.video_id, &info.title, &info.artist, info.duration, cx);
+    let loaded = match root.lyrics.get(&info.video_id) {
+        Some(Load::Ready(result)) => Some(result.clone()),
+        _ => None,
+    };
+    let Some(result) = loaded else {
+        let message = match root.lyrics.get(&info.video_id) {
+            Some(Load::Ready(_)) => "No lyrics found",
+            Some(Load::Failed(message)) => message.as_str(),
+            _ => "Loading lyrics…",
+        };
+        return div().flex().items_center().justify_center().text_sm().text_color(theme.muted).child(message.to_owned());
+    };
+    let Some(result) = result else {
+        return div().flex().items_center().justify_center().text_sm().text_color(theme.muted).child("No lyrics found");
+    };
+    let position = info.position;
+    let mut active = if result.synced { 0 } else { usize::MAX };
+    for (index, line) in result.lines.iter().enumerate() {
+        if line.start.is_some_and(|start| start <= position) {
+            active = index;
+        }
+    }
+    let mut list = div().id("lyrics-scroll").flex().flex_col().gap_2().overflow_y_scroll().max_h(px(430.0)).px_6().py_4();
+    for (index, line) in result.lines.iter().enumerate() {
+        let is_active = index == active;
+        if line.text.trim().is_empty() {
+            list = list.child(div().h(px(10.0)));
+            continue;
+        }
+        let mut column = div().flex().flex_col().gap_1().child(
+            div()
+                .text_lg()
+                .font_weight(if is_active { FontWeight::BOLD } else { FontWeight::NORMAL })
+                .text_color(if is_active { theme.accent } else { theme.muted })
+                .child(line.text.clone()),
+        );
+        if let Some(second) = line.romanization.as_ref().or(line.translation.as_ref()) {
+            if !second.is_empty() {
+                column = column.child(div().text_xs().text_color(theme.muted).child(second.clone()));
+            }
+        }
+        list = list.child(column);
+    }
+    div()
+        .flex()
+        .flex_col()
+        .items_center()
+        .gap_3()
+        .w(px(760.0))
+        .child(list)
+        .child(div().text_xs().text_color(theme.muted).child(format!("Lyrics from {}", result.source)))
 }
 
 pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
@@ -296,14 +388,7 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
     };
 
     let content = if show_lyrics {
-        div()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_3()
-            .child(div().text_sm().text_color(theme.muted).child("Lyrics"))
-            .child(div().text_xs().text_color(theme.muted).child("The lyrics view is not available in this build yet."))
+        lyrics_content(root, &info, cx)
     } else {
         div()
             .flex()
@@ -327,7 +412,7 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
                     .gap_3()
                     .w(px(460.0))
                     .child(div().text_xs().text_color(theme.muted).w(px(40.0)).child(format_time(info.position)))
-                    .child(div().flex_1().child(progress_bar(root, fraction, true, cx, |root, value, cx| {
+                    .child(div().flex_1().child(progress_bar(root, fraction, "expanded-progress", cx, |root, value, cx| {
                         let duration = root.backend.player.state().duration();
                         if duration > 0.0 {
                             root.backend.player.seek(value * duration);
