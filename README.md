@@ -139,6 +139,10 @@ cargo build --release
 ./target/release/musishark
 ```
 
+> **Working on the app.** Use `cargo check` while iterating; it skips codegen and
+> linking. The Nix dev shell links with `mold`, and the dev profile builds
+> dependencies at `opt-level = 1` without debug info so rebuilds stay quick.
+
 > [!NOTE]
 > **What the helper programs are for.** Most songs play through YouTube's
 > player endpoint directly and need none of them. `yt-dlp` (with `nodejs`) is
