@@ -5,7 +5,13 @@ Python sources were removed once the port reached parity and are in git history
 up to commit 180c3fe. This document keeps the references to them (`player/player.py`
 and so on) because they explain why each part of the Rust code is shaped the way it is.
 
-Target stack: gtk4-rs 0.11, libadwaita-rs 0.9, gstreamer-rs 0.25, tokio 1, reqwest 0.13. All GNOME crates share glib 0.22.
+Target stack: GPUI 0.2 for the desktop UI, gstreamer-rs 0.25, tokio 1,
+reqwest 0.13, and glib/gio 0.22 for the GObject playback state.
+
+The GTK4/Libadwaita front end described below has been replaced by the GPUI
+front end in `src/ui`. The old implementation is kept under `src/ui_gtk` for
+reference but is no longer compiled. Backend structure, the GLib main context,
+the player state object, GStreamer and the tokio runtime are unchanged.
 
 ## What the Python app did
 

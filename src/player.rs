@@ -21,7 +21,7 @@ use crate::paths::Paths;
 use crate::net::ytmusic::AuthState;
 use crate::queue::{Bounds, Queue, Step};
 use crate::state::{PlayerState, QueueEntry};
-use gtk::glib;
+use glib;
 
 const STREAM_RETRY_MAX: u8 = 2;
 

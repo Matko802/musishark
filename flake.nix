@@ -59,18 +59,21 @@
 
           nativeBuildInputs = [
             pkgs.pkg-config
-            pkgs.wrapGAppsHook4
             pkgs.glib
             pkgs.mold
           ];
 
           buildInputs = [
-            pkgs.gtk4
-            pkgs.libadwaita
-            pkgs.webkitgtk_6_0
             pkgs.sqlite
             pkgs.glib-networking
             pkgs.openssl
+            pkgs.wayland
+            pkgs.libxkbcommon
+            pkgs.libxcb
+            pkgs.fontconfig
+            pkgs.freetype
+            pkgs.vulkan-loader
+            pkgs.libGL
           ] ++ gstPlugins;
 
           RUSTY_V8_ARCHIVE = rustyV8Archive;
@@ -108,8 +111,9 @@
 
         devShells.default = pkgs.mkShell {
           inputsFrom = [ musishark ];
-          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt ] ++ runtimeTools;
+          packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.mesa pkgs.vulkan-tools ] ++ runtimeTools;
           GST_PLUGIN_SYSTEM_PATH_1_0 = pkgs.lib.makeSearchPathOutput "lib" "lib/gstreamer-1.0" gstPlugins;
+          MESA_ICD = "${pkgs.mesa}/share/vulkan/icd.d/radeon_icd.x86_64.json";
         };
       }
     );

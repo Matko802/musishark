@@ -3,7 +3,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gtk::glib;
+use glib;
 
 use crate::net::NetHandle;
 use crate::paths::Paths;

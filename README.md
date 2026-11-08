@@ -3,7 +3,7 @@
 
 <h3 style="font-size: 30px"> Musishark </h3>
 
-A modern, Linux-first YouTube Music player built with GTK4 and Libadwaita.
+A modern, Linux-first YouTube Music player built with GPUI.
 <br><small>forked from <a href="https://github.com/m-obeid/Mixtapes">m-obeid/Mixtapes</a></small>
 
 </div>
@@ -64,7 +64,7 @@ Upstream project by [m-obeid](https://github.com/m-obeid) — please consider [s
 - **Background Playback** - Music keeps playing when the window is closed
 - **Playlist Editing** - Reorder, multi-select edit, change covers, visibility, and metadata
 - **Caching** - Cached data for snappy performance
-- **Responsive UI** - Adaptive layout built with Libadwaita
+- **Responsive UI** - Adaptive layout built with GPUI
 
 ## Installation
 
@@ -88,8 +88,6 @@ yay -S musishark-git
 ```
 
 > [!WARNING]
-> If you are using CachyOS, you will also need to reinstall webkitgtk-6.0 from the Arch 'extra' repo, not the CachyOS repo:
-> `sudo pacman -S extra/webkitgtk-6.0`
 
 ### Nix
 
@@ -114,22 +112,22 @@ nix develop                           # enter dev shell
 **Arch Linux:**
 
 ```bash
-sudo pacman -S git rust gtk4 libadwaita webkitgtk-6.0 sqlite gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad yt-dlp yt-dlp-ejs nodejs ffmpeg
+sudo pacman -S git rust sqlite wayland libxkbcommon libxcb fontconfig freetype2 vulkan-icd-loader gstreamer gst-plugins-base gst-plugins-good gst-plugins-bad yt-dlp yt-dlp-ejs nodejs ffmpeg
 ```
 
 **Fedora:**
 
 ```bash
-sudo dnf install git cargo gtk4-devel libadwaita-devel webkitgtk6.0-devel sqlite-devel gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good gstreamer1-plugins-bad-free yt-dlp nodejs ffmpeg-free
+sudo dnf install git cargo sqlite-devel wayland-devel libxkbcommon-devel libxcb-devel fontconfig-devel freetype-devel vulkan-loader-devel mesa-vulkan-drivers gstreamer1-devel gstreamer1-plugins-base-devel gstreamer1-plugins-good gstreamer1-plugins-bad-free yt-dlp nodejs ffmpeg-free
 ```
 
 **Debian/Ubuntu:**
 
 ```bash
-sudo apt install git cargo libgtk-4-dev libadwaita-1-dev libwebkitgtk-6.0-dev libsqlite3-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad yt-dlp nodejs ffmpeg
+sudo apt install git cargo libsqlite3-dev libwayland-dev libxkbcommon-dev libxcb1-dev libfontconfig-dev libfreetype-dev libvulkan-dev mesa-vulkan-drivers libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good gstreamer1.0-plugins-bad yt-dlp nodejs ffmpeg
 ```
 
-> The build needs Rust 1.85 or newer, GTK 4.18, libadwaita 1.7 and GStreamer 1.24.
+> The build needs Rust 1.85 or newer, Wayland or X11 with Vulkan, and GStreamer 1.24.
 > On Debian/Ubuntu, consider the Flatpak to avoid outdated packages.
 
 </details>
@@ -173,8 +171,8 @@ flatpak run io.github.matko802.Musishark
 | Dependency                          | Purpose                                                  |
 | ----------------------------------- | -------------------------------------------------------- |
 | Rust 1.85+                          | Builds the app                                           |
-| GTK 4.18 + libadwaita 1.7           | UI toolkit                                               |
-| WebKitGTK 6.0                       | Embedded browser for sign-in                             |
+| GPUI 0.2                            | UI toolkit                                               |
+| Wayland/X11 + Vulkan                | Windowing and GPU rendering                              |
 | GStreamer + plugins (base, good, bad) | Audio playback                                         |
 | SQLite                              | Download library and listening history                   |
 | yt-dlp, yt-dlp-ejs, Node.js         | Fallback stream resolver (uploads) and downloads         |

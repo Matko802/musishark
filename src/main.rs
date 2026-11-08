@@ -1,7 +1,6 @@
 
 mod audio;
 mod bootstrap;
-mod demo;
 mod discord;
 mod downloads;
 mod local_library;
@@ -25,16 +24,12 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use adw::prelude::*;
-use gtk::{gdk, gio, glib};
-
 use crate::mpris::Mpris;
 use crate::paths::Paths;
 use crate::player::Player;
-use crate::ui::window::MainWindow;
 
-const APP_ID: &str = "io.github.matko802.Musishark";
-const APP_NAME: &str = "Musishark";
+pub const APP_ID: &str = "io.github.matko802.Musishark";
+pub const APP_NAME: &str = "Musishark";
 
 pub struct App {
     pub player: Rc<Player>,
@@ -42,16 +37,16 @@ pub struct App {
     pub downloads: Arc<downloads::Downloads>,
     pub download_events: RefCell<Option<async_channel::Receiver<downloads::Event>>>,
     pub paths: Paths,
-    pub demo: Option<demo::Demo>,
-    pub window: RefCell<Option<Rc<MainWindow>>>,
     pub mpris: RefCell<Option<Rc<Mpris>>>,
     pub scrobbler: Arc<scrobbler::Scrobbler>,
     pub lyrics: lyrics::Lyrics,
     pub discord: discord::Discord,
     pub local: Arc<local_library::LocalLibrary>,
+    pub raise_window: RefCell<Option<Rc<dyn Fn()>>>,
+    pub quit_app: RefCell<Option<Rc<dyn Fn()>>>,
 }
 
-fn main() -> glib::ExitCode {
+fn main() -> std::process::ExitCode {
     bootstrap::cap_malloc_arenas();
     bootstrap::raise_fd_limit();
 
@@ -59,14 +54,9 @@ fn main() -> glib::ExitCode {
     bootstrap::init_logging(&paths);
     bootstrap::apply_gsk_renderer_pref(&paths);
 
-    if let Err(err) = gio::resources_register_include!("musishark.gresource") {
-        eprintln!("resource bundle failed to load: {err}");
-        return glib::ExitCode::FAILURE;
-    }
-    glib::set_application_name(APP_NAME);
     if let Err(err) = gst::init() {
         eprintln!("GStreamer init failed: {err}");
-        return glib::ExitCode::FAILURE;
+        return std::process::ExitCode::FAILURE;
     }
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -78,36 +68,29 @@ fn main() -> glib::ExitCode {
         Ok(rt) => rt,
         Err(err) => {
             eprintln!("tokio runtime failed: {err}");
-            return glib::ExitCode::FAILURE;
+            return std::process::ExitCode::FAILURE;
         }
     };
 
-    let mut net = match net::NetHandle::new(runtime.handle().clone(), &paths) {
+    let net = match net::NetHandle::new(runtime.handle().clone(), &paths) {
         Ok(net) => net,
         Err(err) => {
             eprintln!("network client failed: {err:#}");
-            return glib::ExitCode::FAILURE;
+            return std::process::ExitCode::FAILURE;
         }
     };
-    let demo = demo::from_env();
-    if let Some(demo) = &demo {
-        let inner = net.resolver().clone();
-        net = net.with_resolver(Arc::new(net::stream::DemoResolver::new(inner, demo.uris.clone())));
-    }
 
     let (audio, audio_events) = match audio::spawn() {
         Ok(pair) => pair,
         Err(err) => {
             eprintln!("audio engine failed: {err:#}");
-            return glib::ExitCode::FAILURE;
+            return std::process::ExitCode::FAILURE;
         }
     };
 
     let (downloads, download_events) = downloads::Downloads::new(paths.clone(), net.clone());
-    let publish = demo.is_none() || std::env::var_os("MUSISHARK_DEMO_PRESENCE").is_some();
     let scrobbler = scrobbler::Scrobbler::start(&paths, runtime.handle());
     let lyrics = lyrics::Lyrics::new(&paths, net.client().http().clone(), net.client().clone());
-    scrobbler.set_muted(!publish);
     let local = local_library::LocalLibrary::open(&paths);
     let app_ctx = Rc::new(App {
         player: Player::new(net.clone(), downloads.clone(), local.clone(), audio, audio_events, &paths),
@@ -117,98 +100,31 @@ fn main() -> glib::ExitCode {
         download_events: RefCell::new(Some(download_events)),
         scrobbler,
         lyrics,
-        discord: discord::Discord::new(publish && discord::enabled_pref(&paths.read_prefs())),
+        discord: discord::Discord::new(discord::enabled_pref(&paths.read_prefs())),
         paths,
-        demo,
-        window: RefCell::new(None),
         mpris: RefCell::new(None),
+        raise_window: RefCell::new(None),
+        quit_app: RefCell::new(None),
     });
 
-    let app = adw::Application::builder()
-        .application_id(APP_ID)
-        .flags(if app_ctx.demo.is_some() { gio::ApplicationFlags::NON_UNIQUE } else { gio::ApplicationFlags::FLAGS_NONE } | gio::ApplicationFlags::HANDLES_OPEN)
-        .build();
+    let main_context = glib::MainContext::default();
+    let _main_context_guard = main_context.acquire().expect("main context is free at startup");
+    let main_context_for_ui = main_context.clone();
 
-    app.connect_startup(glib::clone!(
-        #[strong]
-        app_ctx,
-        move |_| on_startup(&app_ctx)
-    ));
-    app.connect_activate(glib::clone!(
-        #[strong]
-        app_ctx,
-        move |app| on_activate(app, &app_ctx)
-    ));
-    app.connect_open(glib::clone!(
-        #[strong]
-        app_ctx,
-        move |app, files, _| {
-            on_activate(app, &app_ctx);
-            let Some(window) = app_ctx.window.borrow().clone() else { return };
-            for file in files {
-                let uri = file.uri();
-                if !window.open_link(&uri) {
-                    tracing::warn!(%uri, "not a YouTube link");
-                }
-            }
-        }
-    ));
-    app.connect_shutdown(glib::clone!(
-        #[strong]
-        app_ctx,
-        move |_| {
-            tracing::info!("shutting down");
-            if let Some(mpris) = app_ctx.mpris.borrow_mut().take() {
-                mpris.shutdown();
-            }
-            tray::stop();
-            app_ctx.scrobbler.stop();
-            app_ctx.discord.stop();
-            app_ctx.player.shutdown();
-        }
-    ));
+    tracing::info!(auth = ?app_ctx.net.client().auth_state(), "core started");
+    app_ctx.player.start();
+    app_ctx.mpris.replace(Some(Mpris::start(&app_ctx)));
+    tray::start(&app_ctx);
+    presence::wire(&app_ctx);
+    ui::run(&app_ctx, main_context_for_ui);
 
-    let code = app.run();
+    tray::stop();
+    if let Some(mpris) = app_ctx.mpris.borrow_mut().take() {
+        mpris.shutdown();
+    }
+    app_ctx.scrobbler.stop();
+    app_ctx.discord.stop();
+    app_ctx.player.shutdown();
     runtime.shutdown_timeout(Duration::from_secs(2));
-    code
-}
-
-fn on_startup(ctx: &Rc<App>) {
-    if let Some(display) = gdk::Display::default() {
-        let theme = gtk::IconTheme::for_display(&display);
-        theme.add_resource_path("/io/github/matko802/musishark/icons/hicolor");
-    }
-    gtk::Window::set_default_icon_name(APP_ID);
-    ui::load_css();
-    ui::cover::init_disk_cache(&ctx.paths.cache_dir);
-    let (downloaded, cached, extract) = (ctx.downloads.clone(), ctx.downloads.clone(), ctx.downloads.clone());
-    ui::cover::set_track_art_lookup(move |id| downloaded.is_downloaded(id), move |id| cached.cached_cover(id), move |id| extract.extract_cover(id));
-
-    ctx.player.start();
-    ctx.mpris.replace(Some(Mpris::start(ctx)));
-    tray::start(ctx);
-    presence::wire(ctx);
-    tracing::info!(auth = ?ctx.net.client().auth_state(), "core started");
-}
-
-fn on_activate(app: &adw::Application, ctx: &Rc<App>) {
-    if let Some(window) = app.active_window() {
-        window.present();
-        return;
-    }
-    let window = MainWindow::new(app, ctx);
-    ctx.window.replace(Some(window.clone()));
-    if let Some(demo) = &ctx.demo {
-        demo::install(demo, ctx, &window);
-    }
-    window.present();
-    tracing::info!("main window presented");
-    if ctx.demo.is_none() {
-        let (window, ctx) = (Rc::downgrade(&window), ctx.clone());
-        glib::timeout_add_local_once(Duration::from_millis(700), move || {
-            if let Some(window) = window.upgrade() {
-                window.welcome_or_release_notes(&ctx);
-            }
-        });
-    }
+    std::process::ExitCode::SUCCESS
 }

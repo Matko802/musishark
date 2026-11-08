@@ -5,8 +5,7 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use gtk::prelude::*;
-use gtk::{gio, glib};
+use gio::prelude::*;
 use mpris_server::zbus::{Result as ZbusResult, fdo};
 use mpris_server::{
     LoopStatus, Metadata, PlaybackRate, PlaybackStatus as MprisStatus, PlayerInterface, Property,
@@ -442,15 +441,16 @@ impl Mpris {
                     Command::SetShuffle(shuffle) => player.set_shuffle(shuffle),
                     Command::SetLoop(mode) => player.set_repeat(mode),
                     Command::Raise => {
-                        if let Some(window) = weak_ctx.upgrade().and_then(|c| c.window.borrow().clone()) {
-                            window.window().set_visible(true);
-                            window.present();
+                        let raise = weak_ctx.upgrade().and_then(|c| c.raise_window.borrow().clone());
+                        if let Some(raise) = raise {
+                            raise();
                         }
                     }
                     Command::Quit => {
                         player.stop();
-                        if let Some(app) = gio::Application::default() {
-                            app.quit();
+                        let quit = weak_ctx.upgrade().and_then(|c| c.quit_app.borrow().clone());
+                        if let Some(quit) = quit {
+                            quit();
                         }
                     }
                 }
@@ -711,8 +711,7 @@ async fn write_art_file(http: reqwest::Client, auth: Option<HttpAuth>, dir: Path
 }
 
 fn save_square_jpeg(dir: &Path, path: &Path, bytes: &[u8]) -> anyhow::Result<()> {
-    use gtk::gdk_pixbuf::{InterpType, PixbufLoader};
-    use gtk::prelude::PixbufLoaderExt;
+    use image::GenericImageView;
 
     std::fs::create_dir_all(dir)?;
     if let Ok(entries) = std::fs::read_dir(dir) {
@@ -724,16 +723,13 @@ fn save_square_jpeg(dir: &Path, path: &Path, bytes: &[u8]) -> anyhow::Result<()>
             }
         }
     }
-    let loader = PixbufLoader::new();
-    loader.write(bytes)?;
-    loader.close()?;
-    let pixbuf = loader.pixbuf().ok_or_else(|| anyhow::anyhow!("art did not decode"))?;
-    let (width, height) = (pixbuf.width(), pixbuf.height());
-    let size = width.min(height);
-    let mut pixbuf = pixbuf.new_subpixbuf((width - size) / 2, (height - size) / 2, size, size);
-    if size < MIN_ART_SIZE {
-        pixbuf = pixbuf.scale_simple(MIN_ART_SIZE, MIN_ART_SIZE, InterpType::Bilinear).ok_or_else(|| anyhow::anyhow!("art did not scale"))?;
-    }
-    pixbuf.savev(path, "jpeg", &[("quality", "90")])?;
+    let decoded = image::load_from_memory(bytes).map_err(|err| anyhow::anyhow!("art did not decode: {err}"))?;
+    let (width, height) = decoded.dimensions();
+    let size = width.min(height).max(1);
+    let square = decoded.crop_imm((width - size) / 2, (height - size) / 2, size, size);
+    let square = if size < MIN_ART_SIZE as u32 { square.resize(MIN_ART_SIZE as u32, MIN_ART_SIZE as u32, image::imageops::FilterType::Triangle) } else { square };
+    let file = std::fs::File::create(path)?;
+    let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(std::io::BufWriter::new(file), 90);
+    encoder.encode_image(&square.to_rgb8())?;
     Ok(())
 }
