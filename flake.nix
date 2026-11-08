@@ -83,7 +83,11 @@
           doCheck = false;
         };
 
-        cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+          extraDummyScript = ''
+            install -Dm644 ${./vendor/stacksafe-macro/src/lib.rs} $out/vendor/stacksafe-macro/src/lib.rs
+          '';
+        });
 
         musishark = craneLib.buildPackage (commonArgs // {
           inherit cargoArtifacts;
