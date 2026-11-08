@@ -113,6 +113,9 @@ fn main() -> std::process::ExitCode {
 
     tracing::info!(auth = ?app_ctx.net.client().auth_state(), "core started");
     app_ctx.player.start();
+    if let Some(crate::net::links::Link::Song { video_id, playlist_id }) = std::env::args().skip(1).find_map(|arg| crate::net::links::parse(&arg)) {
+        app_ctx.player.play_link(video_id, playlist_id);
+    }
     app_ctx.mpris.replace(Some(Mpris::start(&app_ctx)));
     tray::start(&app_ctx);
     presence::wire(&app_ctx);

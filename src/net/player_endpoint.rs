@@ -25,10 +25,9 @@ const PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint
 const CLIENT_NAME: &str = "VISIONOS";
 const CLIENT_ID: &str = "101";
 const CLIENT_VERSION: &str = "0.1";
-const CLIENT_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15";
+const CLIENT_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 const LANDING_URL: &str = "https://music.youtube.com/";
-const LANDING_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0";
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
+const LANDING_USER_AGENT: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 /// A visitor id keeps working for days. Refetched well before that.
 const VISITOR_TTL: Duration = Duration::from_secs(6 * 3600);
 /// Past the token-less preview every client gets, so a URL that would die mid-song fails here.
@@ -132,8 +131,7 @@ pub struct PlayerEndpointResolver {
 }
 
 impl PlayerEndpointResolver {
-    pub fn new(paths: &Paths, fallback: Arc<dyn StreamResolver>) -> Self {
-        let http = reqwest::Client::builder().timeout(REQUEST_TIMEOUT).gzip(true).build().unwrap_or_default();
+    pub fn new(paths: &Paths, http: reqwest::Client, fallback: Arc<dyn StreamResolver>) -> Self {
         Self { http, fallback, cache: StreamCache::new(paths.stream_cache_dir.clone()), visitor: Mutex::new(None) }
     }
 
@@ -151,7 +149,7 @@ impl PlayerEndpointResolver {
                 return Ok(visitor);
             }
         }
-        let html = self.http.get(LANDING_URL).header("User-Agent", LANDING_USER_AGENT).header("Cookie", "SOCS=CAI").send().await.map_err(|e| e.to_string())?.text().await.map_err(|e| e.to_string())?;
+        let html = self.http.get(LANDING_URL).header("User-Agent", LANDING_USER_AGENT).header("Cookie", "SOCS=CAI").header("Accept-Language", "en-US,en;q=0.9").send().await.map_err(|e| e.to_string())?.text().await.map_err(|e| e.to_string())?;
         let visitor = visitor_from_landing(&html).ok_or("no visitor data on the landing page")?;
         *self.visitor.lock().unwrap() = Some((visitor.clone(), Instant::now()));
         Ok(visitor)
@@ -318,7 +316,7 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let resolver = PlayerEndpointResolver::new(&Paths::for_tests(dir.path()), Arc::new(Never));
+        let resolver = PlayerEndpointResolver::new(&Paths::for_tests(dir.path()), reqwest::Client::new(), Arc::new(Never));
         let http = resolver.http.clone();
         let visitor = resolver.visitor_data().await.unwrap();
         let response: Value = http.post(PLAYER_URL).header("User-Agent", CLIENT_USER_AGENT).header("X-YouTube-Client-Name", CLIENT_ID).header("X-YouTube-Client-Version", CLIENT_VERSION).header("X-Goog-Visitor-Id", &visitor).json(&player_body("h4hy2Gn-FVE", &visitor)).send().await.unwrap().json().await.unwrap();
@@ -369,7 +367,7 @@ mod tests {
             }
         }
         let dir = tempfile::tempdir().unwrap();
-        let resolver = PlayerEndpointResolver::new(&Paths::for_tests(dir.path()), Arc::new(Never));
+        let resolver = PlayerEndpointResolver::new(&Paths::for_tests(dir.path()), reqwest::Client::new(), Arc::new(Never));
         for id in ["J7p4bzqLvCw", "CuklIb9d3fI"] {
             let started = Instant::now();
             let info = resolver.resolve(VideoId(id.to_owned()), None).await.unwrap();

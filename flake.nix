@@ -61,6 +61,7 @@
             pkgs.pkg-config
             pkgs.glib
             pkgs.mold
+            pkgs.wrapGAppsNoGuiHook
           ];
 
           buildInputs = [
@@ -113,6 +114,7 @@
           inputsFrom = [ musishark ];
           packages = [ pkgs.cargo pkgs.rustc pkgs.clippy pkgs.rustfmt pkgs.mesa pkgs.vulkan-tools ] ++ runtimeTools;
           GST_PLUGIN_SYSTEM_PATH_1_0 = pkgs.lib.makeSearchPathOutput "lib" "lib/gstreamer-1.0" gstPlugins;
+          GIO_EXTRA_MODULES = "${pkgs.glib-networking}/lib/gio/modules";
           MESA_ICD = "${pkgs.mesa}/share/vulkan/icd.d/radeon_icd.x86_64.json";
         };
       }

@@ -51,7 +51,7 @@ impl NetHandle {
         let tokens = Arc::new(potoken::PoTokens::new(paths));
         // The player endpoint answers in a fraction of a second. yt-dlp stays behind it for what it declines.
         let ytdlp: Arc<dyn StreamResolver> = Arc::new(YtDlpResolver::new(paths, tokens.clone()));
-        let native = Arc::new(player_endpoint::PlayerEndpointResolver::new(paths, ytdlp));
+        let native = Arc::new(player_endpoint::PlayerEndpointResolver::new(paths, client.http().clone(), ytdlp));
         // The visitor id and the TLS session cost most of a second, so the first play does not pay for them.
         rt.spawn({
             let native = native.clone();
