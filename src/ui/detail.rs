@@ -105,7 +105,6 @@ fn playlist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                                     .gap_2()
                                     .px_6()
                                     .py_2()
-                                    .rounded_full()
                                     .bg(theme.text)
                                     .text_color(theme.on_accent)
                                     .text_sm()
@@ -155,7 +154,7 @@ fn artist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         Load::Idle => return div().into_any_element(),
     };
     let thumb = data.thumbnails.last().cloned();
-    let cover = root.cover(thumb.as_deref(), 180, cx).rounded_full();
+    let cover = root.cover(thumb.as_deref(), 180, cx);
     let title = if data.name.is_empty() { name } else { data.name.clone() };
     let subtitle = shell::join_detail([data.monthly_listeners.clone().unwrap_or_default(), data.subscribers.clone().unwrap_or_default(), data.views.clone().unwrap_or_default()]);
     let songs = data.songs.as_ref().map(|section| section.results.clone()).unwrap_or_default();
@@ -201,7 +200,6 @@ fn artist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                                         .gap_2()
                                         .px_6()
                                         .py_2()
-                                        .rounded_full()
                                         .bg(theme.text)
                                         .text_color(theme.on_accent)
                                         .text_sm()
@@ -307,7 +305,6 @@ fn search(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                         .gap_5()
                         .p_4()
                         .mb_6()
-                        .rounded_lg()
                         .bg(theme.surface)
                         .cursor_pointer()
                         .hover(move |s| s.bg(theme.surface_hover))
@@ -394,7 +391,6 @@ pub fn track_row(root: &mut Root, tracks: &[Track], index: usize, track: &Track,
         .gap_3()
         .px_3()
         .py_2()
-        .rounded_md()
         .cursor_pointer()
         .when(playing, |el| el.bg(theme.surface))
         .hover(move |s| s.bg(theme.surface_hover))

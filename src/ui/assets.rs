@@ -32,6 +32,7 @@ pub const MUSIC: &str = "icons/music.svg";
 pub const TRASH: &str = "icons/trash.svg";
 pub const CHECK: &str = "icons/check.svg";
 pub const ANTENNA: &str = "icons/antenna.svg";
+pub const EXTERNAL: &str = "icons/external.svg";
 pub const SUN: &str = "icons/sun.svg";
 pub const MOON: &str = "icons/moon.svg";
 
@@ -46,7 +47,7 @@ fn bytes(path: &str) -> Option<&'static [u8]> {
         SEARCH => include_bytes!("../../assets/icons/gpui/search.svg"),
         HOME => include_bytes!("../../assets/icons/gpui/home.svg"),
         LIBRARY => include_bytes!("../../assets/icons/gpui/library.svg"),
-        QUEUE => include_bytes!("../../assets/icons/hicolor/scalable/actions/music-queue-symbolic.svg"),
+        QUEUE => include_bytes!("../../assets/icons/gpui/queue.svg"),
         VOLUME => include_bytes!("../../assets/icons/gpui/volume.svg"),
         VOLUME_MUTED => include_bytes!("../../assets/icons/gpui/volume-muted.svg"),
         CHEVRON_UP => include_bytes!("../../assets/icons/gpui/chevron-up.svg"),
@@ -62,13 +63,14 @@ fn bytes(path: &str) -> Option<&'static [u8]> {
         SETTINGS => include_bytes!("../../assets/icons/gpui/settings.svg"),
         REFRESH => include_bytes!("../../assets/icons/gpui/refresh.svg"),
         BACK => include_bytes!("../../assets/icons/gpui/back.svg"),
-        HEART => include_bytes!("../../assets/icons/hicolor/scalable/actions/heart-outline-thick-symbolic.svg"),
-        HEART_FILLED => include_bytes!("../../assets/icons/hicolor/scalable/actions/heart-filled-symbolic.svg"),
-        COMPASS => include_bytes!("../../assets/icons/hicolor/scalable/actions/compass2-symbolic.svg"),
+        HEART => include_bytes!("../../assets/icons/gpui/heart.svg"),
+        HEART_FILLED => include_bytes!("../../assets/icons/gpui/heart-filled.svg"),
+        COMPASS => include_bytes!("../../assets/icons/gpui/compass.svg"),
         MUSIC => include_bytes!("../../assets/icons/gpui/music.svg"),
         TRASH => include_bytes!("../../assets/icons/gpui/trash.svg"),
         CHECK => include_bytes!("../../assets/icons/gpui/check.svg"),
-        ANTENNA => include_bytes!("../../assets/icons/hicolor/scalable/actions/triangular-antenna-symbolic.svg"),
+        ANTENNA => include_bytes!("../../assets/icons/gpui/antenna.svg"),
+        EXTERNAL => include_bytes!("../../assets/icons/gpui/external.svg"),
         SUN => include_bytes!("../../assets/icons/gpui/sun.svg"),
         MOON => include_bytes!("../../assets/icons/gpui/moon.svg"),
         _ => return None,

@@ -44,7 +44,7 @@ pub fn home(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                 .mb_4()
                 .text_xl()
                 .font_weight(FontWeight::BOLD)
-                .child(div().w(px(4.0)).h(px(20.0)).rounded_full().bg(theme.accent))
+                .child(div().w(px(4.0)).h(px(20.0)).bg(theme.accent))
                 .child(section.title.clone()),
         );
         let strip = horizontal_strip(root, &section.items, 168.0, cx);
@@ -65,7 +65,6 @@ fn dial_tile(root: &mut Root, item: &MediaItem, cx: &mut Context<Root>) -> Div {
         .items_center()
         .gap_3()
         .p_2()
-        .rounded_md()
         .bg(theme.surface)
         .cursor_pointer()
         .hover(move |s| s.bg(theme.surface_hover))
@@ -88,7 +87,7 @@ fn dial_tile(root: &mut Root, item: &MediaItem, cx: &mut Context<Root>) -> Div {
 pub fn card(root: &mut Root, item: &MediaItem, size: f32, circular: bool, cx: &mut Context<Root>) -> Div {
     let theme = root.theme;
     let cover = root.cover(item.thumb.as_deref(), size as u32, cx);
-    let cover = if circular { cover.rounded_full() } else { cover };
+    let cover = if circular { cover } else { cover };
     let item = item.clone();
     let clicked = item.clone();
     div()
@@ -138,14 +137,13 @@ pub fn library(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     root.load_library(root.lib_tab, cx);
     let theme = root.theme;
     let tabs = [(LibraryTab::Playlists, "Playlists"), (LibraryTab::Albums, "Albums"), (LibraryTab::Artists, "Artists"), (LibraryTab::History, "History")];
-    let mut switcher = div().flex().items_center().gap_1().p_1().rounded_full().bg(theme.surface);
+    let mut switcher = div().flex().items_center().gap_1().p_1().bg(theme.surface);
     for (tab, label) in tabs {
         let selected = root.lib_tab == tab;
         switcher = switcher.child(
             div()
                 .px_4()
                 .py_2()
-                .rounded_full()
                 .cursor_pointer()
                 .text_sm()
                 .font_weight(FontWeight::SEMIBOLD)
@@ -187,7 +185,6 @@ pub fn library(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                                 div()
                                     .px_4()
                                     .py_2()
-                                    .rounded_full()
                                     .border_1()
                                     .border_color(theme.border)
                                     .text_sm()
@@ -240,7 +237,7 @@ fn artist_section(root: &mut Root, load: &Load<Vec<MediaItem>>, cx: &mut Context
             let items = items.clone();
             let mut out = div().flex().flex_col().gap_2();
             for item in &items {
-                let cover = root.cover(item.thumb.as_deref(), 48, cx).rounded_full();
+                let cover = root.cover(item.thumb.as_deref(), 48, cx);
                 let item = item.clone();
                 let clicked = item.clone();
                 out = out.child(
@@ -249,7 +246,6 @@ fn artist_section(root: &mut Root, load: &Load<Vec<MediaItem>>, cx: &mut Context
                         .items_center()
                         .gap_3()
                         .p_2()
-                        .rounded_md()
                         .cursor_pointer()
                         .hover(move |s| s.bg(theme.surface_hover))
                         .on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| root.activate(clicked.clone(), cx)))
@@ -290,7 +286,6 @@ fn history_section(root: &mut Root, cx: &mut Context<Root>) -> Div {
                         .items_center()
                         .gap_3()
                         .p_2()
-                        .rounded_md()
                         .cursor_pointer()
                         .hover(move |s| s.bg(theme.surface_hover))
                         .on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| root.play_tracks(all.clone(), index, false, cx)))
@@ -339,7 +334,6 @@ pub fn explore(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
                 div()
                     .px_4()
                     .py_2()
-                    .rounded_full()
                     .bg(theme.surface)
                     .border_1()
                     .border_color(theme.border)

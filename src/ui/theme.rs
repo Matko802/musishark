@@ -78,4 +78,24 @@ impl Theme {
             },
         }
     }
+
+    pub fn lerp(from: Self, to: Self, t: f32) -> Self {
+        fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
+            Rgba { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }
+        }
+        Self {
+            mode: to.mode,
+            dark: to.dark,
+            bg: mix(from.bg, to.bg, t),
+            surface: mix(from.surface, to.surface, t),
+            surface_hover: mix(from.surface_hover, to.surface_hover, t),
+            elevated: mix(from.elevated, to.elevated, t),
+            border: mix(from.border, to.border, t),
+            text: mix(from.text, to.text, t),
+            muted: mix(from.muted, to.muted, t),
+            accent: mix(from.accent, to.accent, t),
+            on_accent: mix(from.on_accent, to.on_accent, t),
+            danger: mix(from.danger, to.danger, t),
+        }
+    }
 }

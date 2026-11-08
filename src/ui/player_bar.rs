@@ -1,8 +1,9 @@
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, Pixels, Window, canvas, div, px, relative, svg};
+use gpui::{Animation, AnimationExt as _, Bounds, Context, Div, FontWeight, MouseButton, MouseDownEvent, Pixels, Window, canvas, div, px, relative, svg};
 
 use crate::model::{LikeStatus, PlaybackStatus, RepeatMode, VideoId};
 
@@ -63,9 +64,9 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
             div()
                 .cursor_pointer()
                 .on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| {
-                    root.expanded = true;
-                    root.expanded_lyrics = false;
-                    cx.notify();
+                    if !root.expanded {
+                        root.toggle_expanded(cx);
+                    }
                 }))
                 .child(root.cover(Some(&info.thumb), 48, cx)),
         )
@@ -121,7 +122,6 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
                 .items_center()
                 .justify_center()
                 .size(px(42.0))
-                .rounded_full()
                 .bg(theme.text)
                 .cursor_pointer()
                 .hover(move |s| s.opacity(0.88))
@@ -188,14 +188,11 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
                 })),
         )
         .child(div().w(px(96.0)).child(volume))
-        .child(shell::icon_button(assets::QUEUE, 17.0, if root.queue_open { theme.accent } else { theme.text }, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| {
-            root.queue_open = !root.queue_open;
-            cx.notify();
-        })))
+        .child(shell::icon_button(assets::QUEUE, 17.0, if root.queue_open { theme.accent } else { theme.text }, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| root.toggle_queue(cx))))
         .child(shell::icon_button(assets::CHEVRON_UP, 16.0, theme.muted, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| {
-            root.expanded = true;
-            root.expanded_lyrics = false;
-            cx.notify();
+            if !root.expanded {
+                root.toggle_expanded(cx);
+            }
         })));
 
     div()
@@ -254,9 +251,8 @@ pub fn slider(
                 .relative()
                 .h(px(4.0))
                 .w_full()
-                .rounded_full()
                 .bg(theme.border)
-                .child(div().absolute().left_0().top_0().bottom_0().rounded_full().bg(theme.text).w(relative(fraction)))
+                .child(div().absolute().left_0().top_0().bottom_0().bg(theme.text).w(relative(fraction)))
                 .child(canvas(
                     move |bounds, _, _| {
                         handle.set(bounds);
@@ -271,15 +267,16 @@ fn progress_bar(root: &mut Root, fraction: f64, is_progress: bool, cx: &mut Cont
     slider(root, bounds, fraction, cx, on_set)
 }
 
-pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> Div {
+pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
     let theme = root.theme;
+    let generation = root.expanded_generation;
     let info = now(root);
     let playing = info.status == PlaybackStatus::Playing;
     let cover = root.cover(Some(&info.thumb), 320, cx);
     let fraction = if info.duration > 0.0 { (info.position / info.duration).clamp(0.0, 1.0) } else { 0.0 };
     let show_lyrics = root.expanded_lyrics;
 
-    let mut player_tab = div().px_4().py_2().rounded_full().text_sm().font_weight(FontWeight::SEMIBOLD).cursor_pointer();
+    let mut player_tab = div().px_4().py_2().text_sm().font_weight(FontWeight::SEMIBOLD).cursor_pointer();
     player_tab = if !show_lyrics {
         player_tab.bg(theme.surface_hover).text_color(theme.text)
     } else {
@@ -288,7 +285,7 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> Div {
             cx.notify();
         }))
     };
-    let mut lyrics_tab = div().px_4().py_2().rounded_full().text_sm().font_weight(FontWeight::SEMIBOLD).cursor_pointer();
+    let mut lyrics_tab = div().px_4().py_2().text_sm().font_weight(FontWeight::SEMIBOLD).cursor_pointer();
     lyrics_tab = if show_lyrics {
         lyrics_tab.bg(theme.surface_hover).text_color(theme.text)
     } else {
@@ -358,7 +355,6 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> Div {
                             .items_center()
                             .justify_center()
                             .size(px(56.0))
-                            .rounded_full()
                             .bg(theme.text)
                             .cursor_pointer()
                             .hover(move |s| s.opacity(0.88))
@@ -390,6 +386,7 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> Div {
         .flex()
         .flex_col()
         .items_center()
+        .occlude()
         .bg(theme.bg)
         .child(
             div()
@@ -409,17 +406,19 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> Div {
                         .items_center()
                         .gap_1()
                         .p_1()
-                        .rounded_full()
                         .border_1()
                         .border_color(theme.border)
                         .child(player_tab.child("Player"))
                         .child(lyrics_tab.child("Lyrics")),
                 )
-                .child(shell::icon_button(assets::QUEUE, 18.0, if root.queue_open { theme.accent } else { theme.text }, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| {
-                    root.queue_open = !root.queue_open;
-                    cx.notify();
-                }))),
+                .child(shell::icon_button(assets::QUEUE, 18.0, if root.queue_open { theme.accent } else { theme.text }, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| root.toggle_queue(cx)))),
         )
         .child(div().flex_1().flex().items_center().justify_center().child(content))
+        .with_animation(
+            gpui::SharedString::from(format!("expanded-player-{generation}")),
+            Animation::new(Duration::from_millis(380)).with_easing(shell::spring),
+            |el, delta| el.top(px((1.0 - shell::spring(delta).clamp(0.0, 1.0)) * 26.0)),
+        )
+        .into_any_element()
 }
 

@@ -25,7 +25,7 @@ use super::detail;
 use super::pages;
 use super::player_bar;
 use super::queue;
-use super::settings;
+use super::settings::{self, SettingsPage};
 use super::theme::{Theme, ThemeMode};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -81,6 +81,7 @@ pub enum PageKind {
 pub struct Root {
     pub backend: Rc<Backend>,
     pub theme: Theme,
+    pub font: gpui::SharedString,
     pub tab: Tab,
     pub lib_tab: LibraryTab,
     pub page: Option<PageKind>,
@@ -91,9 +92,17 @@ pub struct Root {
     pub search_text: String,
     pub root_focus: FocusHandle,
     pub queue_open: bool,
+    pub queue_generation: u64,
     pub expanded: bool,
+    pub expanded_generation: u64,
     pub expanded_lyrics: bool,
     pub settings_open: bool,
+    pub settings_closing: bool,
+    pub settings_generation: u64,
+    pub settings_page: SettingsPage,
+    pub theme_from: Theme,
+    pub theme_to: Theme,
+    pub theme_anim: Option<Instant>,
     pub notices: Rc<RefCell<Vec<String>>>,
     pub toast: Option<(String, Instant)>,
     pub covers: HashSet<String>,
@@ -182,6 +191,10 @@ impl Root {
         let root = Self {
             backend,
             theme: Theme::new(mode),
+            theme_from: Theme::new(mode),
+            theme_to: Theme::new(mode),
+            theme_anim: None,
+            font: system_font(),
             tab: Tab::Home,
             lib_tab: LibraryTab::Playlists,
             page: None,
@@ -192,9 +205,14 @@ impl Root {
             search_text: String::new(),
             root_focus,
             queue_open: false,
+            queue_generation: 0,
             expanded: false,
+            expanded_generation: 0,
             expanded_lyrics: false,
             settings_open: false,
+            settings_closing: false,
+            settings_generation: 0,
+            settings_page: SettingsPage::General,
             notices,
             toast: None,
             covers: HashSet::new(),
@@ -504,18 +522,90 @@ impl Root {
     }
 
     pub fn set_theme(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
-        self.theme = Theme::new(mode);
+        let target = Theme::new(mode);
+        if target.mode == self.theme_to.mode && self.theme_anim.is_none() {
+            return;
+        }
         let paths = self.backend.paths.clone();
         paths.update_prefs(|prefs| {
             prefs.insert("ui_theme".to_owned(), serde_json::Value::String(mode.key().to_owned()));
         });
+        self.theme_from = self.theme;
+        self.theme_to = target;
+        let start = Instant::now();
+        self.theme_anim = Some(start);
+        cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_millis(16)).await;
+            let done = this
+                .update(cx, |root, cx| {
+                    let Some(start) = root.theme_anim else { return true };
+                    let t = (start.elapsed().as_secs_f32() / 0.36).min(1.0);
+                    if t >= 1.0 {
+                        root.theme = root.theme_to;
+                        root.theme_anim = None;
+                    } else {
+                        root.theme = Theme::lerp(root.theme_from, root.theme_to, spring(t).clamp(0.0, 1.0));
+                    }
+                    cx.notify();
+                    t >= 1.0
+                })
+                .unwrap_or(true);
+            if done {
+                break;
+            }
+        })
+        .detach();
         cx.notify();
+    }
+
+    pub fn toggle_queue(&mut self, cx: &mut Context<Self>) {
+        if !self.queue_open {
+            self.queue_generation = self.queue_generation.wrapping_add(1);
+        }
+        self.queue_open = !self.queue_open;
+        cx.notify();
+    }
+
+    pub fn toggle_expanded(&mut self, cx: &mut Context<Self>) {
+        if !self.expanded {
+            self.expanded_generation = self.expanded_generation.wrapping_add(1);
+            self.expanded_lyrics = false;
+        }
+        self.expanded = !self.expanded;
+        cx.notify();
+    }
+
+    pub fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings_generation = self.settings_generation.wrapping_add(1);
+        self.settings_open = true;
+        self.settings_closing = false;
+        cx.notify();
+    }
+
+    pub fn close_settings(&mut self, cx: &mut Context<Self>) {
+        if self.settings_closing || !self.settings_open {
+            return;
+        }
+        self.settings_closing = true;
+        let generation = self.settings_generation;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            Timer::after(Duration::from_millis(200)).await;
+            let _ = this.update(cx, |root, cx| {
+                if root.settings_generation == generation && root.settings_closing {
+                    root.settings_open = false;
+                    root.settings_closing = false;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     fn header(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = self.theme;
         let tab_labels = [(Tab::Home, "Home", assets::HOME), (Tab::Library, "Library", assets::LIBRARY), (Tab::Explore, "Explore", assets::COMPASS)];
-        let mut nav = div().flex().items_center().gap_1().p_1().rounded_full().bg(theme.surface);
+        let mut nav = div().flex().items_center().gap_1().p_1().bg(theme.surface);
         for (tab, label, icon) in tab_labels {
             let selected = self.tab == tab && self.page.is_none();
             let mut button = div()
@@ -524,7 +614,6 @@ impl Root {
                 .gap_2()
                 .px_4()
                 .py_2()
-                .rounded_full()
                 .cursor_pointer()
                 .text_sm()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -564,7 +653,6 @@ impl Root {
                     .px_3()
                     .py_2()
                     .ml_2()
-                    .rounded_full()
                     .bg(theme.surface)
                     .border_1()
                     .border_color(theme.border)
@@ -601,18 +689,19 @@ impl Root {
                 root.set_theme(next, cx);
             })))
             .child(icon_button(assets::QUEUE, 18.0, theme.text, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, press(cx, |root, _, _, cx| {
-                root.queue_open = !root.queue_open;
-                cx.notify();
+                root.toggle_queue(cx);
             })))
             .child(
                 div()
                     .size(px(32.0))
-                    .rounded_full()
                     .overflow_hidden()
                     .cursor_pointer()
                     .on_mouse_down(gpui::MouseButton::Left, press(cx, |root, _, _, cx| {
-                        root.settings_open = !root.settings_open;
-                        cx.notify();
+                        if root.settings_open {
+                            root.close_settings(cx);
+                        } else {
+                            root.open_settings(cx);
+                        }
                     }))
                     .child(self.account_cover(32, cx)),
             );
@@ -669,6 +758,18 @@ impl Root {
             return;
         }
         let key = event.keystroke.key.as_str();
+        if self.settings_open {
+            match key {
+                "escape" => self.close_settings(cx),
+                "1" => self.settings_page = SettingsPage::General,
+                "2" => self.settings_page = SettingsPage::Appearance,
+                "3" => self.settings_page = SettingsPage::Lyrics,
+                "4" => self.settings_page = SettingsPage::Services,
+                "5" => self.settings_page = SettingsPage::Advanced,
+                _ => cx.notify(),
+            }
+            return;
+        }
         let command = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         match key {
             "/" => {
@@ -678,6 +779,13 @@ impl Root {
             "f" if command => {
                 self.search_open = true;
                 cx.notify();
+            }
+            "," => {
+                if self.settings_open {
+                    self.close_settings(cx);
+                } else {
+                    self.open_settings(cx);
+                }
             }
             "escape" => {
                 if self.settings_open {
@@ -691,13 +799,11 @@ impl Root {
                 }
                 cx.notify();
             }
-            "q" => {
-                self.queue_open = !self.queue_open;
-                cx.notify();
-            }
-            "e" => {
-                self.expanded = !self.expanded;
-                cx.notify();
+            "q" => self.toggle_queue(cx),
+            "e" => self.toggle_expanded(cx),
+            "t" => {
+                let next = if self.theme_to.dark { ThemeMode::White } else { ThemeMode::Amoled };
+                self.set_theme(next, cx);
             }
             " " => {
                 self.backend.player.toggle_play();
@@ -730,6 +836,7 @@ impl Render for Root {
             .size_full()
             .bg(theme.bg)
             .text_color(theme.text)
+            .font_family(self.font.clone())
             .track_focus(&self.root_focus)
             .on_key_down(cx.listener(|root, event: &KeyDownEvent, window, cx| root.global_key(event, window, cx)));
         root = root.child(self.header(cx));
@@ -755,11 +862,32 @@ impl Render for Root {
                     .right_0()
                     .flex()
                     .justify_center()
-                    .child(div().px_4().py_2().rounded_full().bg(theme.elevated).border_1().border_color(theme.border).text_sm().child(message)),
+                    .child(div().px_4().py_2().bg(theme.elevated).border_1().border_color(theme.border).text_sm().child(message)),
             );
         }
         root
     }
+}
+
+pub fn spring(delta: f32) -> f32 {
+    if delta >= 1.0 {
+        return 1.0;
+    }
+    let t = delta.max(0.0);
+    (1.0 - (-6.0 * t).exp() * (1.0 + 6.0 * t)).clamp(0.0, 1.0)
+}
+
+fn system_font() -> gpui::SharedString {
+    std::process::Command::new("fc-match")
+        .args(["-f", "%{family[0]}", "sans-serif"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|family| family.trim().to_owned())
+        .filter(|family| !family.is_empty())
+        .map(gpui::SharedString::from)
+        .unwrap_or_else(|| gpui::SharedString::from(".SystemUIFont"))
 }
 
 pub fn press<T: 'static>(
@@ -778,7 +906,6 @@ pub fn icon_button(path: &'static str, size: f32, color: gpui::Rgba, hover: gpui
         .items_center()
         .justify_center()
         .size(px(size + 16.0))
-        .rounded_full()
         .cursor_pointer()
         .text_color(color)
         .hover(move |s| s.bg(hover))
@@ -790,7 +917,6 @@ pub fn cover_image(image: Arc<RenderImage>, target: u32, theme: Theme) -> Div {
     div()
         .size(px(side))
         .flex_shrink_0()
-        .rounded_md()
         .overflow_hidden()
         .bg(theme.surface)
         .child(gpui::img(image).size_full().object_fit(gpui::ObjectFit::Cover))
@@ -801,7 +927,6 @@ pub fn placeholder_cover(target: u32, theme: Theme) -> Div {
     div()
         .size(px(side))
         .flex_shrink_0()
-        .rounded_md()
         .overflow_hidden()
         .bg(theme.surface)
         .flex()

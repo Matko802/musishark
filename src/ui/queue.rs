@@ -1,11 +1,14 @@
+use std::time::Duration;
+
 use gpui::prelude::*;
-use gpui::{Context, Div, FontWeight, div, px, svg};
+use gpui::{Animation, AnimationExt as _, Context, FontWeight, div, px, svg};
 
 use super::assets;
 use super::shell::{self, Root};
 
-pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> Div {
+pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
     let theme = root.theme;
+    let generation = root.queue_generation;
     let tracks = root.backend.player.queue_tracks();
     let current = root.backend.player.state().current_index();
     let count = tracks.len();
@@ -28,7 +31,6 @@ pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> Div {
             .px_3()
             .py_2()
             .mx_2()
-            .rounded_md()
             .cursor_pointer()
             .when(playing, |el| el.bg(row_theme.surface_hover))
             .hover(move |s| s.bg(row_theme.surface_hover))
@@ -70,6 +72,7 @@ pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> Div {
         .w(px(320.0))
         .flex()
         .flex_col()
+        .occlude()
         .bg(theme.bg)
         .border_l_1()
         .border_color(theme.border)
@@ -97,7 +100,6 @@ pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> Div {
                     div()
                         .px_3()
                         .py_1()
-                        .rounded_full()
                         .bg(theme.surface)
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
@@ -115,5 +117,11 @@ pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> Div {
                 }))),
         )
         .child(list)
+        .with_animation(
+            gpui::SharedString::from(format!("queue-panel-{generation}")),
+            Animation::new(Duration::from_millis(320)).with_easing(shell::spring),
+            |el, delta| el.right(px(-(1.0 - shell::spring(delta).clamp(0.0, 1.0)) * 18.0)),
+        )
+        .into_any_element()
 }
 
