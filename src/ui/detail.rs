@@ -65,11 +65,9 @@ fn playlist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     }
 
     let mut page = div()
-        .id("detail-scroll")
         .flex()
         .flex_col()
-        .size_full()
-        .overflow_y_scroll()
+        .w_full()
         .px_8()
         .pt_5()
         .pb_8()
@@ -136,7 +134,7 @@ fn playlist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     for (index, track) in tracks.iter().enumerate() {
         page = page.child(track_row(root, &tracks, index, track, cx));
     }
-    page.into_any_element()
+    shell::scroll_area(root, "detail", page, cx).into_any_element()
 }
 
 fn artist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
@@ -165,11 +163,9 @@ fn artist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     let shuffle = songs.clone();
 
     let mut page = div()
-        .id("artist-scroll")
         .flex()
         .flex_col()
-        .size_full()
-        .overflow_y_scroll()
+        .w_full()
         .px_8()
         .pt_5()
         .pb_8()
@@ -239,7 +235,7 @@ fn artist(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
             page = page.child(div().h(px(20.0))).child(pages::shelf(root, label, &section.results, 168.0, cx));
         }
     }
-    page.into_any_element()
+    shell::scroll_area(root, "artist", page, cx).into_any_element()
 }
 
 fn category(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
@@ -249,11 +245,9 @@ fn category(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         _ => return div().into_any_element(),
     };
     let mut page = div()
-        .id("category-scroll")
         .flex()
         .flex_col()
-        .size_full()
-        .overflow_y_scroll()
+        .w_full()
         .px_8()
         .pt_5()
         .pb_8()
@@ -273,7 +267,7 @@ fn category(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         Load::Failed(message) => page = page.child(shell::failed(theme, message)),
         Load::Idle => {}
     }
-    page.into_any_element()
+    shell::scroll_area(root, "category", page, cx).into_any_element()
 }
 
 fn search(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
@@ -283,11 +277,9 @@ fn search(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         _ => return div().into_any_element(),
     };
     let mut page = div()
-        .id("search-scroll")
         .flex()
         .flex_col()
-        .size_full()
-        .overflow_y_scroll()
+        .w_full()
         .px_8()
         .pt_5()
         .pb_8()
@@ -336,7 +328,7 @@ fn search(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         Load::Failed(message) => page = page.child(shell::failed(theme, message)),
         Load::Idle => {}
     }
-    page.into_any_element()
+    shell::scroll_area(root, "search", page, cx).into_any_element()
 }
 
 fn search_filters(root: &mut Root, cx: &mut Context<Root>) -> Div {
@@ -375,11 +367,9 @@ fn search_filters(root: &mut Root, cx: &mut Context<Root>) -> Div {
 fn history(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     let theme = root.theme;
     let mut page = div()
-        .id("history-scroll")
         .flex()
         .flex_col()
-        .size_full()
-        .overflow_y_scroll()
+        .w_full()
         .px_8()
         .pt_5()
         .pb_8()
@@ -404,7 +394,7 @@ fn history(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         Load::Failed(message) => page = page.child(shell::failed(theme, message)),
         Load::Idle => {}
     }
-    page.into_any_element()
+    shell::scroll_area(root, "history", page, cx).into_any_element()
 }
 
 pub fn track_row(root: &mut Root, tracks: &[Track], index: usize, track: &Track, cx: &mut Context<Root>) -> Div {
@@ -449,7 +439,7 @@ pub fn track_row(root: &mut Root, tracks: &[Track], index: usize, track: &Track,
         )
         .child(div().text_xs().text_color(theme.muted).child(format_duration(track.duration_seconds)))
         .child(
-            shell::icon_button(if liked { assets::HEART_FILLED } else { assets::HEART }, 16.0, if liked { theme.accent } else { theme.muted }, theme.surface_hover)
+            shell::icon_button(if liked { assets::THUMB_UP_FILLED } else { assets::THUMB_UP }, 16.0, if liked { theme.accent } else { theme.muted }, theme.surface_hover)
                 .on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| {
                     let next = if liked { LikeStatus::Indifferent } else { LikeStatus::Like };
                     root.backend.player.set_like_status(VideoId(video.0.clone()), next);

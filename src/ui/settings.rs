@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::time::Duration;
 
 use gpui::prelude::*;
-use gpui::{Animation, AnimationExt as _, Context, Div, FontWeight, div, px, rgba, rgb, svg};
+use gpui::{Animation, AnimationExt as _, Context, Div, FontWeight, div, px, rgba, svg};
 use serde_json::Value;
 
 use crate::bootstrap;
@@ -12,7 +12,7 @@ use crate::scrobbler::SERVICES;
 
 use super::assets;
 use super::shell::{self, Root};
-use super::theme::{Theme, ThemeMode};
+use super::theme::Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SettingsPage {
@@ -45,8 +45,6 @@ type ApplyBool = fn(&mut Root, bool, &mut Context<Root>);
 pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
     let theme = root.theme;
     let backdrop = if theme.dark { rgba(0x000000e6) } else { rgba(0x0000005c) };
-    let generation = root.settings_generation;
-    let closing = root.settings_closing;
 
     let body = div()
         .w(px(920.0))
@@ -70,23 +68,6 @@ pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
                 .child(content(root, cx)),
         );
 
-    let body = if closing {
-        body.with_animation(
-            gpui::SharedString::from(format!("settings-body-close-{generation}")),
-            Animation::new(Duration::from_millis(180)).with_easing(gpui::ease_in_out),
-            |el, delta| el.w(px(920.0 * (1.0 - 0.05 * delta))).h(px(640.0 * (1.0 - 0.05 * delta))),
-        )
-    } else {
-        body.with_animation(
-            gpui::SharedString::from(format!("settings-body-open-{generation}")),
-            Animation::new(Duration::from_millis(340)).with_easing(shell::spring),
-            |el, delta| {
-                let scale = 0.94 + 0.06 * shell::spring(delta).clamp(0.0, 1.0);
-                el.w(px(920.0 * scale)).h(px(640.0 * scale))
-            },
-        )
-    };
-
     let overlay = div()
         .absolute()
         .inset_0()
@@ -97,24 +78,7 @@ pub fn panel(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
         .occlude()
         .on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| root.close_settings(cx)))
         .child(body);
-
-    if closing {
-        overlay
-            .with_animation(
-                gpui::SharedString::from(format!("settings-close-{generation}")),
-                Animation::new(Duration::from_millis(180)).with_easing(gpui::ease_in_out),
-                |el, delta| el.opacity(1.0 - delta),
-            )
-            .into_any_element()
-    } else {
-        overlay
-            .with_animation(
-                gpui::SharedString::from(format!("settings-open-{generation}")),
-                Animation::new(Duration::from_millis(340)).with_easing(shell::spring),
-                |el, delta| el.opacity(shell::spring(delta).clamp(0.0, 1.0)),
-            )
-            .into_any_element()
-    }
+    overlay.into_any_element()
 }
 
 fn header(root: &mut Root, cx: &mut Context<Root>) -> Div {
@@ -126,8 +90,6 @@ fn header(root: &mut Root, cx: &mut Context<Root>) -> Div {
         .h(px(62.0))
         .px_6()
         .flex_shrink_0()
-        .border_b_1()
-        .border_color(theme.border)
         .child(div().text_xl().font_weight(FontWeight::BOLD).child("Settings"))
         .child(
             shell::icon_button(assets::CLOSE, 16.0, theme.muted, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, shell::press(cx, |root, _, _, cx| root.close_settings(cx))),
@@ -161,7 +123,7 @@ fn sidebar(root: &mut Root, cx: &mut Context<Root>) -> Div {
                 .child(label),
         );
     }
-    div().w(px(212.0)).flex_shrink_0().border_r_1().border_color(theme.border).bg(theme.bg).child(list)
+    div().w(px(212.0)).flex_shrink_0().bg(theme.bg).child(list)
 }
 
 fn content(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
@@ -173,24 +135,12 @@ fn content(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
         SettingsPage::Services => services(root, cx),
         SettingsPage::Advanced => advanced(root, cx),
     };
-    let generation = root.settings_generation;
-    let page_index = root.settings_page as u8;
+    let inner = div().flex().flex_col().w_full().px_8().py_6().bg(theme.bg).child(page);
     div()
-        .id("settings-scroll")
         .flex()
-        .flex_col()
         .flex_1()
         .min_h_0()
-        .overflow_y_scroll()
-        .px_8()
-        .py_6()
-        .bg(theme.bg)
-        .child(page)
-        .with_animation(
-            gpui::SharedString::from(format!("settings-page-{generation}-{page_index}")),
-            Animation::new(Duration::from_millis(280)).with_easing(shell::spring),
-            |el, delta| el.opacity(shell::spring(delta).clamp(0.0, 1.0)).relative().top(px((1.0 - shell::spring(delta).clamp(0.0, 1.0)) * 8.0)),
-        )
+        .child(shell::scroll_area(root, "settings", inner, cx))
         .into_any_element()
 }
 
@@ -199,9 +149,8 @@ fn page_header(_theme: Theme, title: &str, _description: &str) -> Div {
 }
 
 fn group(theme: Theme, title: &str, description: Option<&str>, rows: Vec<Div>) -> Div {
-    let mut card = div().flex().flex_col().bg(theme.surface).border_1().border_color(theme.border);
-    for (index, row) in rows.into_iter().enumerate() {
-        let row = if index > 0 { row.border_t_1().border_color(theme.border) } else { row };
+    let mut card = div().flex().flex_col().bg(theme.surface);
+    for row in rows {
         card = card.child(row);
     }
     let _ = description;
@@ -446,42 +395,14 @@ fn updates_group(root: &mut Root, cx: &mut Context<Root>) -> Div {
     )
 }
 
-fn appearance(root: &mut Root, cx: &mut Context<Root>) -> Div {
+fn appearance(root: &mut Root, _cx: &mut Context<Root>) -> Div {
     let theme = root.theme;
-    let cards = div()
-        .flex()
-        .flex_row()
-        .gap_4()
-        .child(theme_card(root, cx, ThemeMode::Amoled))
-        .child(theme_card(root, cx, ThemeMode::White));
-    page_header(theme, "Appearance", "")
-        .child(group(theme, "Theme", None, vec![div().p_4().child(cards)]))
-}
-
-fn theme_card(root: &mut Root, cx: &mut Context<Root>, option: ThemeMode) -> Div {
-    let theme = root.theme;
-    let selected = theme.mode == option;
-    let swatch = match option {
-        ThemeMode::Amoled => rgb(0x000000),
-        ThemeMode::White => rgb(0xffffff),
-    };
-    div()
-        .flex_1()
-        .flex()
-        .items_center()
-        .gap_4()
-        .p_4()
-        .bg(theme.elevated)
-        .border_1()
-        .border_color(if selected { theme.accent } else { theme.border })
-        .cursor_pointer()
-        .hover(move |s| s.bg(theme.surface_hover))
-        .on_mouse_down(gpui::MouseButton::Left, shell::press(cx, move |root, _, _, cx| {
-            root.set_theme(option, cx);
-        }))
-        .child(div().w(px(48.0)).h(px(48.0)).flex_shrink_0().bg(swatch).border_1().border_color(theme.border))
-        .child(div().flex().flex_col().flex_1().min_w_0().child(div().text_sm().font_weight(FontWeight::SEMIBOLD).child(option.label())))
-        .when(selected, |el| el.child(svg().path(assets::CHECK).size(px(16.0)).text_color(theme.accent)))
+    page_header(theme, "Appearance", "").child(group(
+        theme,
+        "Theme",
+        None,
+        vec![value_row(theme, "Theme", "", &format!("{} (automatic)", theme.mode.label()))],
+    ))
 }
 
 fn lyrics(root: &mut Root, cx: &mut Context<Root>) -> Div {

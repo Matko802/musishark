@@ -7,13 +7,6 @@ pub enum ThemeMode {
 }
 
 impl ThemeMode {
-    pub fn key(self) -> &'static str {
-        match self {
-            ThemeMode::Amoled => "amoled",
-            ThemeMode::White => "white",
-        }
-    }
-
     pub fn label(self) -> &'static str {
         match self {
             ThemeMode::Amoled => "AMOLED",
@@ -21,12 +14,6 @@ impl ThemeMode {
         }
     }
 
-    pub fn from_pref(value: Option<&str>) -> Self {
-        match value {
-            Some("white") | Some("light") => ThemeMode::White,
-            _ => ThemeMode::Amoled,
-        }
-    }
 }
 
 #[derive(Clone, Copy)]

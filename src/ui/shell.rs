@@ -8,7 +8,7 @@ use glib::prelude::*;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, ClipboardItem, Context, Div, FocusHandle, KeyDownEvent, Pixels, Render, RenderImage, Timer, Window, WindowBounds, WindowOptions, div, px, size, svg,
+    App, Application, Bounds, ClipboardItem, Context, Div, FocusHandle, KeyDownEvent, Pixels, Render, RenderImage, Timer, Window, WindowAppearance, WindowBounds, WindowOptions, canvas, div, px, size, svg,
 };
 
 use crate::App as Backend;
@@ -95,11 +95,11 @@ pub struct Root {
     pub queue_open: bool,
     pub queue_generation: u64,
     pub expanded: bool,
+    pub expanded_closing: bool,
     pub expanded_generation: u64,
+    pub viewport_height: f32,
     pub expanded_lyrics: bool,
     pub settings_open: bool,
-    pub settings_closing: bool,
-    pub settings_generation: u64,
     pub settings_page: SettingsPage,
     pub theme_from: Theme,
     pub theme_to: Theme,
@@ -110,6 +110,10 @@ pub struct Root {
     pub shelf_offsets: HashMap<String, usize>,
     pub viewport_width: f32,
     pub lyrics: HashMap<String, Load<Option<crate::lyrics::LyricsResult>>>,
+    pub scroll_offsets: HashMap<&'static str, f32>,
+    pub scroll_targets: HashMap<&'static str, f32>,
+    pub scroll_metrics: HashMap<&'static str, Rc<Cell<(f32, f32)>>>,
+    pub scroll_animating: bool,
     pub progress_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub volume_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub raise_flag: Rc<Cell<bool>>,
@@ -118,7 +122,6 @@ pub struct Root {
 
 pub fn run(backend: &Rc<Backend>, main_context: glib::MainContext) {
     let backend = backend.clone();
-    let mode = ThemeMode::from_pref(backend.paths.read_prefs().get("ui_theme").and_then(|v| v.as_str()));
     super::cover::init_disk_cache(&backend.paths.cache_dir);
     {
         let (downloaded, cached, extract) = (backend.downloads.clone(), backend.downloads.clone(), backend.downloads.clone());
@@ -137,7 +140,17 @@ pub fn run(backend: &Rc<Backend>, main_context: glib::MainContext) {
                     app_id: Some(crate::APP_ID.into()),
                     ..Default::default()
                 },
-                move |window, cx| cx.new(|cx| Root::new(backend, mode, window, cx)),
+                move |window, cx| {
+                    let root = cx.new(|cx| Root::new(backend, window, cx));
+                    let weak = root.downgrade();
+                    window
+                        .observe_window_appearance(move |window, cx| {
+                            let dark = matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark);
+                            weak.update(cx, |root, cx| root.apply_system_theme(dark, cx)).ok();
+                        })
+                        .detach();
+                    root
+                },
             )
             .expect("app window");
 
@@ -172,7 +185,8 @@ pub fn run(backend: &Rc<Backend>, main_context: glib::MainContext) {
 }
 
 impl Root {
-    pub fn new(backend: Rc<Backend>, mode: ThemeMode, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(backend: Rc<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mode = if matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark) { ThemeMode::Amoled } else { ThemeMode::White };
         let notices = Rc::new(RefCell::new(Vec::new()));
         let sink = notices.clone();
         let state = backend.player.state().clone();
@@ -212,11 +226,11 @@ impl Root {
             queue_open: false,
             queue_generation: 0,
             expanded: false,
+            expanded_closing: false,
             expanded_generation: 0,
+            viewport_height: 700.0,
             expanded_lyrics: false,
             settings_open: false,
-            settings_closing: false,
-            settings_generation: 0,
             settings_page: SettingsPage::General,
             notices,
             toast: None,
@@ -224,6 +238,10 @@ impl Root {
             shelf_offsets: HashMap::new(),
             viewport_width: 1040.0,
             lyrics: HashMap::new(),
+            scroll_offsets: HashMap::new(),
+            scroll_targets: HashMap::new(),
+            scroll_metrics: HashMap::new(),
+            scroll_animating: false,
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             raise_flag: Rc::new(Cell::new(false)),
@@ -366,6 +384,7 @@ impl Root {
     }
 
     pub fn open_playlist(&mut self, id: String, title: String, thumb: Option<String>, album: bool, cx: &mut Context<Self>) {
+        self.reset_scroll("detail");
         self.page = Some(PageKind::Playlist { id: id.clone(), title, thumb, album, data: Load::Loading });
         let api = self.backend.net.client().api();
         let net = self.backend.net.clone();
@@ -393,6 +412,7 @@ impl Root {
     }
 
     pub fn open_artist(&mut self, id: String, name: String, cx: &mut Context<Self>) {
+        self.reset_scroll("artist");
         self.page = Some(PageKind::Artist { id: id.clone(), name, data: Load::Loading });
         let api = self.backend.net.client().api();
         let net = self.backend.net.clone();
@@ -410,6 +430,7 @@ impl Root {
     }
 
     pub fn open_category(&mut self, title: String, params: String, cx: &mut Context<Self>) {
+        self.reset_scroll("category");
         self.page = Some(PageKind::Category { title, params: params.clone(), data: Load::Loading });
         let api = self.backend.net.client().api();
         let net = self.backend.net.clone();
@@ -441,6 +462,7 @@ impl Root {
     }
 
     fn load_search(&mut self, query: String, filter: Option<SearchFilter>, cx: &mut Context<Self>) {
+        self.reset_scroll("search");
         self.search_filter = filter;
         self.page = Some(PageKind::Search { query: query.clone(), data: Load::Loading });
         let api = self.backend.net.client().api();
@@ -469,6 +491,7 @@ impl Root {
     }
 
     pub fn open_history(&mut self, cx: &mut Context<Self>) {
+        self.reset_scroll("history");
         self.page = Some(PageKind::History { data: Load::Loading });
         let api = self.backend.net.client().api();
         let net = self.backend.net.clone();
@@ -487,6 +510,53 @@ impl Root {
 
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
         cx.notify();
+    }
+
+    fn reset_scroll(&mut self, id: &'static str) {
+        self.scroll_offsets.insert(id, 0.0);
+        self.scroll_targets.insert(id, 0.0);
+    }
+
+    fn step_scroll(&mut self) -> bool {
+        let mut moving = false;
+        for (id, target) in self.scroll_targets.iter_mut() {
+            let max = self.scroll_metrics.get(id).map_or(0.0, |metrics| {
+                let (content, viewport) = metrics.get();
+                (content - viewport).max(0.0)
+            });
+            *target = target.clamp(0.0, max);
+            let current = self.scroll_offsets.entry(*id).or_insert(0.0);
+            let diff = *target - *current;
+            if diff.abs() > 0.5 {
+                *current += diff * 0.3;
+                moving = true;
+            } else {
+                *current = *target;
+            }
+        }
+        moving
+    }
+
+    fn start_scroll(&mut self, cx: &mut Context<Self>) {
+        if self.scroll_animating {
+            return;
+        }
+        self.scroll_animating = true;
+        cx.spawn(async move |this, cx| loop {
+            Timer::after(Duration::from_millis(16)).await;
+            let moving = this
+                .update(cx, |root, cx| {
+                    let moving = root.step_scroll();
+                    cx.notify();
+                    moving
+                })
+                .unwrap_or(false);
+            if !moving {
+                let _ = this.update(cx, |root, _| root.scroll_animating = false);
+                break;
+            }
+        })
+        .detach();
     }
 
     pub fn ensure_lyrics(&mut self, video_id: &str, title: &str, artist: &str, duration: f64, cx: &mut Context<Self>) {
@@ -612,15 +682,12 @@ impl Root {
         self.cover(Some(&url), target, cx)
     }
 
-    pub fn set_theme(&mut self, mode: ThemeMode, cx: &mut Context<Self>) {
-        let target = Theme::new(mode);
-        if target.mode == self.theme_to.mode && self.theme_anim.is_none() {
+    pub fn apply_system_theme(&mut self, dark: bool, cx: &mut Context<Self>) {
+        let mode = if dark { ThemeMode::Amoled } else { ThemeMode::White };
+        if self.theme_to.mode == mode && self.theme_anim.is_none() {
             return;
         }
-        let paths = self.backend.paths.clone();
-        paths.update_prefs(|prefs| {
-            prefs.insert("ui_theme".to_owned(), serde_json::Value::String(mode.key().to_owned()));
-        });
+        let target = Theme::new(mode);
         self.theme_from = self.theme;
         self.theme_to = target;
         let start = Instant::now();
@@ -657,40 +724,52 @@ impl Root {
         cx.notify();
     }
 
-    pub fn toggle_expanded(&mut self, cx: &mut Context<Self>) {
+    pub fn open_expanded(&mut self, cx: &mut Context<Self>) {
         if !self.expanded {
             self.expanded_generation = self.expanded_generation.wrapping_add(1);
             self.expanded_lyrics = false;
         }
-        self.expanded = !self.expanded;
+        self.expanded = true;
+        self.expanded_closing = false;
         cx.notify();
     }
 
-    pub fn open_settings(&mut self, cx: &mut Context<Self>) {
-        self.settings_generation = self.settings_generation.wrapping_add(1);
-        self.settings_open = true;
-        self.settings_closing = false;
-        cx.notify();
-    }
-
-    pub fn close_settings(&mut self, cx: &mut Context<Self>) {
-        if self.settings_closing || !self.settings_open {
+    pub fn close_expanded(&mut self, cx: &mut Context<Self>) {
+        if !self.expanded {
             return;
         }
-        self.settings_closing = true;
-        let generation = self.settings_generation;
+        self.expanded = false;
+        self.expanded_closing = true;
+        let generation = self.expanded_generation;
         cx.notify();
         cx.spawn(async move |this, cx| {
-            Timer::after(Duration::from_millis(200)).await;
+            Timer::after(Duration::from_millis(240)).await;
             let _ = this.update(cx, |root, cx| {
-                if root.settings_generation == generation && root.settings_closing {
-                    root.settings_open = false;
-                    root.settings_closing = false;
+                if root.expanded_generation == generation && root.expanded_closing {
+                    root.expanded_closing = false;
                     cx.notify();
                 }
             });
         })
         .detach();
+    }
+
+    pub fn toggle_expanded(&mut self, cx: &mut Context<Self>) {
+        if self.expanded {
+            self.close_expanded(cx);
+        } else {
+            self.open_expanded(cx);
+        }
+    }
+
+    pub fn open_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings_open = true;
+        cx.notify();
+    }
+
+    pub fn close_settings(&mut self, cx: &mut Context<Self>) {
+        self.settings_open = false;
+        cx.notify();
     }
 
     fn header(&mut self, cx: &mut Context<Self>) -> Div {
@@ -775,10 +854,6 @@ impl Root {
             .justify_end()
             .gap_1()
             .flex_1()
-            .child(icon_button(if theme.dark { assets::SUN } else { assets::MOON }, 17.0, theme.text, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, press(cx, |root, _, _, cx| {
-                let next = if root.theme.dark { ThemeMode::White } else { ThemeMode::Amoled };
-                root.set_theme(next, cx);
-            })))
             .child(icon_button(assets::QUEUE, 18.0, theme.text, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, press(cx, |root, _, _, cx| {
                 root.toggle_queue(cx);
             })))
@@ -882,7 +957,7 @@ impl Root {
                 if self.settings_open {
                     self.settings_open = false;
                 } else if self.expanded {
-                    self.expanded = false;
+                    self.close_expanded(cx);
                 } else if self.queue_open {
                     self.queue_open = false;
                 } else if self.page.is_some() {
@@ -892,10 +967,6 @@ impl Root {
             }
             "q" => self.toggle_queue(cx),
             "e" => self.toggle_expanded(cx),
-            "t" => {
-                let next = if self.theme_to.dark { ThemeMode::White } else { ThemeMode::Amoled };
-                self.set_theme(next, cx);
-            }
             " " => {
                 self.backend.player.toggle_play();
                 cx.notify();
@@ -912,6 +983,7 @@ impl Root {
 impl Render for Root {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.viewport_width = window.viewport_size().width.into();
+        self.viewport_height = window.viewport_size().height.into();
         let theme = self.theme;
         let content: gpui::AnyElement = match &self.page {
             Some(_) => detail::page(self, cx),
@@ -938,7 +1010,7 @@ impl Render for Root {
         }
         root = root.child(body);
         root = root.child(player_bar::bar(self, window, cx));
-        if self.expanded {
+        if self.expanded || self.expanded_closing {
             root = root.child(player_bar::expanded(self, cx));
         }
         if self.settings_open {
@@ -990,6 +1062,64 @@ pub fn press<T: 'static>(
         cx.stop_propagation();
         f(this, event, window, cx);
     })
+}
+
+pub fn scroll_area(root: &mut Root, id: &'static str, content: Div, cx: &mut Context<Root>) -> gpui::AnyElement {
+    let metrics = root.scroll_metrics.entry(id).or_insert_with(|| Rc::new(Cell::new((0.0, 0.0)))).clone();
+    let max = {
+        let (content_height, viewport_height) = metrics.get();
+        (content_height - viewport_height).max(0.0)
+    };
+    let current = root.scroll_offsets.entry(id).or_insert(0.0);
+    if *current > max {
+        *current = max;
+    }
+    let current = *current;
+    let wheel_metrics = metrics.clone();
+    let content_metrics = metrics.clone();
+    let viewport_metrics = metrics.clone();
+    div()
+        .id(gpui::SharedString::from(format!("smooth-scroll-{id}")))
+        .relative()
+        .w_full()
+        .h_full()
+        .overflow_hidden()
+        .on_scroll_wheel(cx.listener(move |root, event: &gpui::ScrollWheelEvent, _, cx| {
+            let delta = event.delta.pixel_delta(px(20.0));
+            let dy: f32 = delta.y.into();
+            let (content_height, viewport_height) = wheel_metrics.get();
+            let max = (content_height - viewport_height).max(0.0);
+            let target = root.scroll_targets.entry(id).or_insert(0.0);
+            *target = (*target - dy * 2.4).clamp(0.0, max);
+            cx.stop_propagation();
+            root.start_scroll(cx);
+        }))
+        .child(
+            div()
+                .flex()
+                .flex_col()
+                .w_full()
+                .relative()
+                .top(px(-current))
+                .child(content)
+                .child(canvas(
+                    move |bounds, _, _| {
+                        let (_, viewport_height) = content_metrics.get();
+                        let height: f32 = bounds.size.height.into();
+                        content_metrics.set((height, viewport_height));
+                    },
+                    |_, _, _, _| {},
+                ).absolute().inset_0()),
+        )
+        .child(canvas(
+            move |bounds, _, _| {
+                let (content_height, _) = viewport_metrics.get();
+                let height: f32 = bounds.size.height.into();
+                viewport_metrics.set((content_height, height));
+            },
+            |_, _, _, _| {},
+        ).absolute().inset_0())
+        .into_any_element()
 }
 
 pub fn icon_button(path: &'static str, size: f32, color: gpui::Rgba, hover: gpui::Rgba) -> Div {

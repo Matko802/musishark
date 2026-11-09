@@ -51,7 +51,7 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
     let theme = root.theme;
     let info = now(root);
     let playing = info.status == PlaybackStatus::Playing;
-    let like_icon = if info.like == LikeStatus::Like { assets::HEART_FILLED } else { assets::HEART };
+    let like_icon = if info.like == LikeStatus::Like { assets::THUMB_UP_FILLED } else { assets::THUMB_UP };
     let like_color = if info.like == LikeStatus::Like { theme.accent } else { theme.muted };
     let share_video = info.video_id.clone();
     let dislike_video = info.video_id.clone();
@@ -216,8 +216,6 @@ pub fn bar(root: &mut Root, _window: &mut Window, cx: &mut Context<Root>) -> Div
         .px_4()
         .flex_shrink_0()
         .bg(theme.bg)
-        .border_t_1()
-        .border_color(theme.border)
         .child(left)
         .child(center)
         .child(right)
@@ -362,6 +360,8 @@ fn lyrics_content(root: &mut Root, info: &Now, cx: &mut Context<Root>) -> Div {
 pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
     let theme = root.theme;
     let generation = root.expanded_generation;
+    let closing = root.expanded_closing;
+    let height = root.viewport_height.max(1.0);
     let info = now(root);
     let playing = info.status == PlaybackStatus::Playing;
     let cover = root.cover(Some(&info.thumb), 320, cx);
@@ -467,7 +467,10 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
 
     div()
         .absolute()
-        .inset_0()
+        .top_0()
+        .left_0()
+        .right_0()
+        .bottom_0()
         .flex()
         .flex_col()
         .items_center()
@@ -500,9 +503,16 @@ pub fn expanded(root: &mut Root, cx: &mut Context<Root>) -> gpui::AnyElement {
         )
         .child(div().flex_1().flex().items_center().justify_center().child(content))
         .with_animation(
-            gpui::SharedString::from(format!("expanded-player-{generation}")),
-            Animation::new(Duration::from_millis(380)).with_easing(shell::spring),
-            |el, delta| el.top(px((1.0 - shell::spring(delta).clamp(0.0, 1.0)) * 26.0)),
+            gpui::SharedString::from(format!("expanded-player-{generation}-{closing}")),
+            if closing {
+                Animation::new(Duration::from_millis(220)).with_easing(gpui::ease_in_out)
+            } else {
+                Animation::new(Duration::from_millis(380)).with_easing(shell::spring)
+            },
+            move |el, delta| {
+                let travel = if closing { delta } else { 1.0 - shell::spring(delta).clamp(0.0, 1.0) };
+                el.top(px(travel * height)).bottom(px(-travel * height))
+            },
         )
         .into_any_element()
 }

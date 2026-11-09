@@ -17,7 +17,7 @@ pub fn home(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         Load::Idle => (Vec::new(), Vec::new()),
     };
 
-    let mut page = div().id("home-scroll").flex().flex_col().size_full().overflow_y_scroll().px_8().pt_6().pb_8();
+    let mut page = div().flex().flex_col().w_full().px_8().pt_6().pb_8();
     if !dial.is_empty() {
         page = page.child(heading(theme, "Quick picks", Some(assets::PLAY)));
         for row in dial.chunks(3) {
@@ -38,7 +38,7 @@ pub fn home(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         }
         page = page.child(shelf(root, &section.title, &section.items, 168.0, cx)).child(div().h(px(12.0)));
     }
-    page.into_any_element()
+    shell::scroll_area(root, "home", page, cx).into_any_element()
 }
 
 fn dial_tile(root: &mut Root, item: &MediaItem, cx: &mut Context<Root>) -> Div {
@@ -205,11 +205,9 @@ pub fn library(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
     }
 
     let mut page = div()
-        .id("library-scroll")
         .flex()
         .flex_col()
-        .size_full()
-        .overflow_y_scroll()
+        .w_full()
         .px_8()
         .pt_6()
         .pb_8()
@@ -258,7 +256,7 @@ pub fn library(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         }
         LibraryTab::History => page = page.child(history_section(root, cx)),
     }
-    page.into_any_element()
+    shell::scroll_area(root, "library", page, cx).into_any_element()
 }
 
 fn media_section(root: &mut Root, load: &Load<Vec<MediaItem>>, columns: usize, size: f32, cx: &mut Context<Root>) -> Div {
@@ -365,7 +363,7 @@ pub fn explore(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
         Load::Idle => return div().into_any_element(),
     };
 
-    let mut page = div().id("explore-scroll").flex().flex_col().size_full().overflow_y_scroll().px_8().pt_6().pb_8();
+    let mut page = div().flex().flex_col().w_full().px_8().pt_6().pb_8();
     page = page.child(heading(theme, "Explore", None));
 
     let categories: Vec<_> = data.for_you.iter().chain(data.moods.iter()).chain(data.genres.iter()).cloned().collect();
@@ -408,7 +406,7 @@ pub fn explore(root: &mut Root, cx: &mut Context<Root>) -> AnyElement {
             page = page.child(shelf(root, "Charts", &charts.daily, 168.0, cx));
         }
     }
-    page.into_any_element()
+    shell::scroll_area(root, "explore", page, cx).into_any_element()
 }
 
 fn empty(theme: Theme, message: &str) -> Div {
