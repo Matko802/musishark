@@ -232,6 +232,14 @@ impl Player {
         self.queue.borrow().tracks().to_vec()
     }
 
+    pub fn queue_len(&self) -> usize {
+        self.queue.borrow().tracks().len()
+    }
+
+    pub fn queue_track(&self, index: usize) -> Option<Track> {
+        self.queue.borrow().tracks().get(index).cloned()
+    }
+
     pub fn repeat_mode(&self) -> RepeatMode {
         self.queue.borrow().repeat()
     }

@@ -8,7 +8,7 @@ use glib::prelude::*;
 
 use gpui::prelude::*;
 use gpui::{
-    App, Application, Bounds, ClipboardItem, Context, Div, FocusHandle, KeyDownEvent, Pixels, Render, RenderImage, Timer, Window, WindowAppearance, WindowBounds, WindowOptions, canvas, div, px, size, svg,
+    Animation, AnimationExt as _, App, Application, Bounds, ClipboardItem, Context, Div, FocusHandle, KeyDownEvent, Pixels, Render, RenderImage, Rgba, Timer, Window, WindowAppearance, WindowBounds, WindowOptions, canvas, div, px, size, svg,
 };
 
 use crate::App as Backend;
@@ -28,7 +28,7 @@ use super::queue;
 use super::settings::{self, SettingsPage};
 use super::theme::{Theme, ThemeMode};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Tab {
     Home,
     Library,
@@ -84,6 +84,14 @@ pub struct Root {
     pub font: gpui::SharedString,
     pub tab: Tab,
     pub lib_tab: LibraryTab,
+    pub tab_generation: u64,
+    pub nav_prev: Option<Tab>,
+    pub lib_generation: u64,
+    pub lib_prev: Option<LibraryTab>,
+    pub search_generation: u64,
+    pub content_slide: f32,
+    pub nav_bounds: Rc<Cell<Bounds<Pixels>>>,
+    pub nav_tab_bounds: HashMap<Tab, Rc<Cell<Bounds<Pixels>>>>,
     pub page: Option<PageKind>,
     pub home: Load<HomeData>,
     pub explore: Load<ExploreData>,
@@ -99,21 +107,27 @@ pub struct Root {
     pub expanded_generation: u64,
     pub viewport_height: f32,
     pub expanded_lyrics: bool,
+    pub compact_bar_anim: bool,
+    pub morph_bounds: HashMap<&'static str, Rc<Cell<Bounds<Pixels>>>>,
+    pub morph_from: HashMap<&'static str, Bounds<Pixels>>,
+    pub morph_to: HashMap<&'static str, Bounds<Pixels>>,
     pub settings_open: bool,
     pub settings_page: SettingsPage,
-    pub theme_from: Theme,
-    pub theme_to: Theme,
-    pub theme_anim: Option<Instant>,
     pub notices: Rc<RefCell<Vec<String>>>,
     pub toast: Option<(String, Instant)>,
     pub covers: HashSet<String>,
     pub shelf_offsets: HashMap<String, usize>,
     pub viewport_width: f32,
     pub lyrics: HashMap<String, Load<Option<crate::lyrics::LyricsResult>>>,
+    pub lyrics_active: HashMap<String, usize>,
     pub scroll_offsets: HashMap<&'static str, f32>,
     pub scroll_targets: HashMap<&'static str, f32>,
     pub scroll_metrics: HashMap<&'static str, Rc<Cell<(f32, f32)>>>,
+    pub scroll_activity: HashMap<&'static str, Instant>,
+    pub scroll_hover: HashSet<&'static str>,
+    pub scrollbar_bounds: HashMap<&'static str, Rc<Cell<Bounds<Pixels>>>>,
     pub scroll_animating: bool,
+    pub track_lists: HashMap<String, Rc<Vec<Track>>>,
     pub progress_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub volume_bounds: Rc<Cell<Bounds<Pixels>>>,
     pub raise_flag: Rc<Cell<bool>>,
@@ -186,7 +200,9 @@ pub fn run(backend: &Rc<Backend>, main_context: glib::MainContext) {
 
 impl Root {
     pub fn new(backend: Rc<Backend>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let mode = if matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark) { ThemeMode::Amoled } else { ThemeMode::White };
+        let dark = system_dark_preference()
+            .unwrap_or_else(|| matches!(window.appearance(), WindowAppearance::Dark | WindowAppearance::VibrantDark));
+        let mode = if dark { ThemeMode::Amoled } else { ThemeMode::White };
         let notices = Rc::new(RefCell::new(Vec::new()));
         let sink = notices.clone();
         let state = backend.player.state().clone();
@@ -209,12 +225,17 @@ impl Root {
         let root = Self {
             backend,
             theme: Theme::new(mode),
-            theme_from: Theme::new(mode),
-            theme_to: Theme::new(mode),
-            theme_anim: None,
             font: system_font(),
             tab: Tab::Home,
             lib_tab: LibraryTab::Playlists,
+            tab_generation: 0,
+            nav_prev: None,
+            lib_generation: 0,
+            lib_prev: None,
+            search_generation: 0,
+            content_slide: 1.0,
+            nav_bounds: Rc::new(Cell::new(Bounds::default())),
+            nav_tab_bounds: HashMap::new(),
             page: None,
             home: Load::Idle,
             explore: Load::Idle,
@@ -230,6 +251,10 @@ impl Root {
             expanded_generation: 0,
             viewport_height: 700.0,
             expanded_lyrics: false,
+            compact_bar_anim: false,
+            morph_bounds: HashMap::new(),
+            morph_from: HashMap::new(),
+            morph_to: HashMap::new(),
             settings_open: false,
             settings_page: SettingsPage::General,
             notices,
@@ -238,10 +263,15 @@ impl Root {
             shelf_offsets: HashMap::new(),
             viewport_width: 1040.0,
             lyrics: HashMap::new(),
+            lyrics_active: HashMap::new(),
             scroll_offsets: HashMap::new(),
             scroll_targets: HashMap::new(),
             scroll_metrics: HashMap::new(),
+            scroll_activity: HashMap::new(),
+            scroll_hover: HashSet::new(),
+            scrollbar_bounds: HashMap::new(),
             scroll_animating: false,
+            track_lists: HashMap::new(),
             progress_bounds: Rc::new(Cell::new(Bounds::default())),
             volume_bounds: Rc::new(Cell::new(Bounds::default())),
             raise_flag: Rc::new(Cell::new(false)),
@@ -384,7 +414,8 @@ impl Root {
     }
 
     pub fn open_playlist(&mut self, id: String, title: String, thumb: Option<String>, album: bool, cx: &mut Context<Self>) {
-        self.reset_scroll("detail");
+        self.search_text.clear();
+        self.reset_scroll("playlist");
         self.page = Some(PageKind::Playlist { id: id.clone(), title, thumb, album, data: Load::Loading });
         let api = self.backend.net.client().api();
         let net = self.backend.net.clone();
@@ -400,7 +431,11 @@ impl Root {
                 .await
                 .ok()
                 .and_then(Result::ok);
+            let cached = result.as_ref().map(|details| (details.id.clone(), Rc::new(details.tracks.clone())));
             let _ = this.update(cx, |root, cx| {
+                if let Some((id, tracks)) = cached {
+                    root.track_lists.insert(id, tracks);
+                }
                 if let Some(PageKind::Playlist { data, .. }) = root.page.as_mut() {
                     *data = result.map_or_else(|| Load::Failed("Could not load this collection".to_owned()), Load::Ready);
                 }
@@ -412,6 +447,7 @@ impl Root {
     }
 
     pub fn open_artist(&mut self, id: String, name: String, cx: &mut Context<Self>) {
+        self.search_text.clear();
         self.reset_scroll("artist");
         self.page = Some(PageKind::Artist { id: id.clone(), name, data: Load::Loading });
         let api = self.backend.net.client().api();
@@ -430,6 +466,7 @@ impl Root {
     }
 
     pub fn open_category(&mut self, title: String, params: String, cx: &mut Context<Self>) {
+        self.search_text.clear();
         self.reset_scroll("category");
         self.page = Some(PageKind::Category { title, params: params.clone(), data: Load::Loading });
         let api = self.backend.net.client().api();
@@ -448,7 +485,8 @@ impl Root {
     }
 
     pub fn open_search(&mut self, query: String, cx: &mut Context<Self>) {
-        self.search_open = false;
+        self.search_text.clear();
+        self.set_search_open(false, cx);
         self.search_filter = None;
         self.load_search(query, None, cx);
     }
@@ -491,6 +529,7 @@ impl Root {
     }
 
     pub fn open_history(&mut self, cx: &mut Context<Self>) {
+        self.search_text.clear();
         self.reset_scroll("history");
         self.page = Some(PageKind::History { data: Load::Loading });
         let api = self.backend.net.client().api();
@@ -537,21 +576,24 @@ impl Root {
         moving
     }
 
-    fn start_scroll(&mut self, cx: &mut Context<Self>) {
+    pub fn start_scroll(&mut self, id: &'static str, cx: &mut Context<Self>) {
+        self.scroll_activity.retain(|_, at| at.elapsed() < Duration::from_millis(4000));
+        self.scroll_activity.insert(id, Instant::now());
         if self.scroll_animating {
             return;
         }
         self.scroll_animating = true;
         cx.spawn(async move |this, cx| loop {
             Timer::after(Duration::from_millis(16)).await;
-            let moving = this
+            let (moving, visible) = this
                 .update(cx, |root, cx| {
                     let moving = root.step_scroll();
+                    let visible = root.scroll_activity.values().any(|at| at.elapsed() < Duration::from_millis(1100));
                     cx.notify();
-                    moving
+                    (moving, visible)
                 })
-                .unwrap_or(false);
-            if !moving {
+                .unwrap_or((false, false));
+            if !moving && !visible {
                 let _ = this.update(cx, |root, _| root.scroll_animating = false);
                 break;
             }
@@ -619,8 +661,17 @@ impl Root {
     }
 
     pub fn go_back(&mut self, cx: &mut Context<Self>) {
+        self.search_text.clear();
         self.page = None;
         cx.notify();
+    }
+
+    pub fn scoped_search(&self) -> bool {
+        match &self.page {
+            Some(PageKind::Playlist { .. }) | Some(PageKind::Artist { .. }) | Some(PageKind::History { .. }) => true,
+            Some(_) => false,
+            None => self.tab == Tab::Library,
+        }
     }
 
     pub fn activate(&mut self, item: MediaItem, cx: &mut Context<Self>) {
@@ -637,6 +688,27 @@ impl Root {
                     self.play_tracks(vec![track], 0, false, cx);
                 }
             }
+        }
+    }
+
+    pub fn activate_in(&mut self, item: MediaItem, pool: Rc<Vec<MediaItem>>, radio: bool, cx: &mut Context<Self>) {
+        if !matches!(item.kind, ItemKind::Song | ItemKind::Video) {
+            self.activate(item, cx);
+            return;
+        }
+        let mut tracks: Vec<Track> = pool.iter().filter_map(MediaItem::to_track).collect();
+        let mut index = tracks.iter().position(|track| track.video_id.as_str() == item.id).unwrap_or(0);
+        if tracks.is_empty() {
+            let Some(track) = item.to_track() else { return };
+            tracks = vec![track];
+            index = 0;
+        }
+        if radio {
+            let seed = tracks.last().map(|track| track.video_id.0.clone()).unwrap_or_default();
+            self.backend.player.play_then_radio(tracks, index, &seed);
+            cx.notify();
+        } else {
+            self.play_tracks(tracks, index, false, cx);
         }
     }
 
@@ -684,35 +756,10 @@ impl Root {
 
     pub fn apply_system_theme(&mut self, dark: bool, cx: &mut Context<Self>) {
         let mode = if dark { ThemeMode::Amoled } else { ThemeMode::White };
-        if self.theme_to.mode == mode && self.theme_anim.is_none() {
+        if self.theme.mode == mode {
             return;
         }
-        let target = Theme::new(mode);
-        self.theme_from = self.theme;
-        self.theme_to = target;
-        let start = Instant::now();
-        self.theme_anim = Some(start);
-        cx.spawn(async move |this, cx| loop {
-            Timer::after(Duration::from_millis(16)).await;
-            let done = this
-                .update(cx, |root, cx| {
-                    let Some(start) = root.theme_anim else { return true };
-                    let t = (start.elapsed().as_secs_f32() / 0.36).min(1.0);
-                    if t >= 1.0 {
-                        root.theme = root.theme_to;
-                        root.theme_anim = None;
-                    } else {
-                        root.theme = Theme::lerp(root.theme_from, root.theme_to, spring(t).clamp(0.0, 1.0));
-                    }
-                    cx.notify();
-                    t >= 1.0
-                })
-                .unwrap_or(true);
-            if done {
-                break;
-            }
-        })
-        .detach();
+        self.theme = Theme::new(mode);
         cx.notify();
     }
 
@@ -724,10 +771,42 @@ impl Root {
         cx.notify();
     }
 
+    pub fn morph_bounds(&mut self, key: &'static str) -> Rc<Cell<Bounds<Pixels>>> {
+        self.morph_bounds.entry(key).or_insert_with(|| Rc::new(Cell::new(Bounds::default()))).clone()
+    }
+
+    fn snapshot_morphs(&mut self, opening: bool) {
+        let kinds = [
+            ("cover", "compact-cover", "expanded-cover"),
+            ("title", "compact-title", "expanded-title"),
+            ("play", "compact-play", "expanded-play"),
+        ];
+        for (kind, compact, expanded) in kinds {
+            let (from_key, to_key) = if opening { (compact, expanded) } else { (expanded, compact) };
+            let from = self.morph_bounds.get(from_key).map_or_else(Bounds::default, |bounds| bounds.get());
+            let to = self.morph_bounds.get(to_key).map_or_else(Bounds::default, |bounds| bounds.get());
+            self.morph_from.insert(kind, from);
+            self.morph_to.insert(kind, to);
+        }
+    }
+
     pub fn open_expanded(&mut self, cx: &mut Context<Self>) {
         if !self.expanded {
             self.expanded_generation = self.expanded_generation.wrapping_add(1);
             self.expanded_lyrics = false;
+            self.compact_bar_anim = true;
+            self.snapshot_morphs(true);
+            let generation = self.expanded_generation;
+            cx.spawn(async move |this, cx| {
+                Timer::after(Duration::from_millis(380)).await;
+                let _ = this.update(cx, |root, cx| {
+                    if root.expanded_generation == generation {
+                        root.compact_bar_anim = false;
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
         self.expanded = true;
         self.expanded_closing = false;
@@ -740,6 +819,8 @@ impl Root {
         }
         self.expanded = false;
         self.expanded_closing = true;
+        self.compact_bar_anim = false;
+        self.snapshot_morphs(false);
         let generation = self.expanded_generation;
         cx.notify();
         cx.spawn(async move |this, cx| {
@@ -762,6 +843,14 @@ impl Root {
         }
     }
 
+    fn set_search_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.search_open != open {
+            self.search_open = open;
+            self.search_generation = self.search_generation.wrapping_add(1);
+        }
+        cx.notify();
+    }
+
     pub fn open_settings(&mut self, cx: &mut Context<Self>) {
         self.settings_open = true;
         cx.notify();
@@ -774,25 +863,136 @@ impl Root {
 
     fn header(&mut self, cx: &mut Context<Self>) -> Div {
         let theme = self.theme;
+        let open = self.search_open;
         let tab_labels = [(Tab::Home, "Home", assets::HOME), (Tab::Library, "Library", assets::LIBRARY), (Tab::Explore, "Explore", assets::COMPASS)];
-        let mut nav = div().flex().items_center().gap_1().p_1().bg(theme.surface);
+        let generation = self.tab_generation;
+        let current_tab = (self.page.is_none()).then_some(self.tab);
+        let prev_tab = if self.page.is_none() { self.nav_prev } else { None };
+        let animating = generation > 0 && current_tab.is_some() && prev_tab.is_some() && prev_tab != current_tab;
+        let nav_bounds_cell = self.nav_bounds.clone();
+        let mut nav = div().relative().flex().items_center().gap_1().p_1().bg(theme.surface);
+        nav = nav.child(canvas(move |bounds, _, _| nav_bounds_cell.set(bounds), |_, _, _, _| {}).absolute().inset_0());
+        if animating {
+            if let (Some(previous), Some(current)) = (prev_tab, current_tab) {
+                let nav_box = self.nav_bounds.get();
+                let from_box = self.nav_tab_bounds.get(&previous).map(|cell| cell.get());
+                let to_box = self.nav_tab_bounds.get(&current).map(|cell| cell.get());
+                if let (Some(from_box), Some(to_box)) = (from_box, to_box) {
+                    if from_box.size.width > px(0.0) && to_box.size.width > px(0.0) {
+                        let (fx, fy) = (f32::from(from_box.origin.x - nav_box.origin.x), f32::from(from_box.origin.y - nav_box.origin.y));
+                        let (fw, fh) = (f32::from(from_box.size.width), f32::from(from_box.size.height));
+                        let (tx, ty) = (f32::from(to_box.origin.x - nav_box.origin.x), f32::from(to_box.origin.y - nav_box.origin.y));
+                        let (tw, th) = (f32::from(to_box.size.width), f32::from(to_box.size.height));
+                        nav = nav.child(
+                            div()
+                                .absolute()
+                                .bg(theme.text)
+                                .with_animation(
+                                    gpui::SharedString::from(format!("nav-indicator-{generation}")),
+                                    Animation::new(Duration::from_millis(260)).with_easing(spring),
+                                    move |el, delta| {
+                                        el.left(px(fx + (tx - fx) * delta))
+                                            .top(px(fy + (ty - fy) * delta))
+                                            .w(px(fw + (tw - fw) * delta))
+                                            .h(px(fh + (th - fh) * delta))
+                                    },
+                                ),
+                        );
+                    }
+                }
+            }
+        }
+        if self.search_generation > 0 {
+            let mut field = div().id("search-field").flex().items_center().gap_2().h(px(36.0)).overflow_hidden().text_sm();
+            if open {
+                let value = self.search_text.clone();
+                let empty = value.is_empty();
+                let cursor = || {
+                    div()
+                        .flex_shrink_0()
+                        .w(px(1.5))
+                        .h(px(16.0))
+                        .bg(theme.text)
+                        .with_animation(
+                            gpui::SharedString::from("search-cursor"),
+                            Animation::new(Duration::from_millis(1060)).repeat(),
+                            |el, delta| el.opacity(if delta < 0.5 { 1.0 } else { 0.0 }),
+                        )
+                        .into_any_element()
+                };
+                let text = div()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .child(if empty { "Search songs, albums, artists".to_owned() } else { value });
+                let mut row = div().flex().items_center().gap_1().flex_1().min_w_0().overflow_hidden();
+                if empty {
+                    row = row.child(cursor()).child(text);
+                } else {
+                    row = row.child(text).child(cursor());
+                }
+                field = field
+                    .px_3()
+                    .text_color(if empty { theme.muted } else { theme.text })
+                    .child(svg().path(assets::SEARCH).size(px(15.0)).text_color(theme.muted))
+                    .child(row);
+            }
+            let (from, to) = if open { (0.0, 280.0) } else { (280.0, 0.0) };
+            nav = nav.child(
+                field
+                    .with_animation(
+                        gpui::SharedString::from(format!("search-field-{}", self.search_generation)),
+                        Animation::new(Duration::from_millis(220)).with_easing(spring),
+                        move |el, delta| el.w(px(from + (to - from) * delta)),
+                    )
+                    .into_any_element(),
+            );
+        } else if open {
+            nav = nav.child(div().id("search-field").flex().items_center().gap_2().w(px(280.0)).h(px(36.0)).px_3().text_sm());
+        }
         for (tab, label, icon) in tab_labels {
-            let selected = self.tab == tab && self.page.is_none();
+            let selected = current_tab == Some(tab);
+            let previous = animating && prev_tab == Some(tab);
+            let icon_el: gpui::AnyElement = if animating {
+                svg()
+                    .path(icon)
+                    .size(px(15.0))
+                    .with_animation(
+                        gpui::SharedString::from(format!("nav-icon-{generation}-{label}")),
+                        Animation::new(Duration::from_millis(220)).with_easing(spring),
+                        move |el, delta| {
+                            let p = if selected { delta } else { 1.0 - delta };
+                            el.text_color(mix(theme.text, theme.on_accent, p))
+                        },
+                    )
+                    .into_any_element()
+            } else {
+                svg().path(icon).size(px(15.0)).text_color(if selected { theme.on_accent } else { theme.text }).into_any_element()
+            };
             let mut button = div()
                 .flex()
                 .items_center()
+                .justify_center()
                 .gap_2()
-                .px_4()
-                .py_2()
+                .size_full()
                 .cursor_pointer()
                 .text_sm()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_color(if selected { theme.on_accent } else { theme.text })
-                .when(selected, |el| el.bg(theme.text))
-                .when(!selected, |el| el.hover(move |s| s.bg(theme.surface_hover)))
-                .child(svg().path(icon).size(px(15.0)).text_color(if selected { theme.on_accent } else { theme.text }))
-                .child(label);
+                .when(selected && !animating, |el| el.bg(theme.text))
+                .when(!selected && !previous, move |el| el.hover(move |s| s.bg(theme.surface_hover)))
+                .child(icon_el)
+                .when(!open, |el| el.child(label));
             button = button.on_mouse_down(gpui::MouseButton::Left, press(cx, move |root, _, _, cx| {
+                let changed = root.tab != tab || root.page.is_some();
+                if changed {
+                    let was_root = root.page.is_none() && root.tab != tab;
+                    root.nav_prev = was_root.then_some(root.tab);
+                    root.content_slide = if tab_order(tab) >= tab_order(root.tab) { 1.0 } else { -1.0 };
+                    root.tab_generation = root.tab_generation.wrapping_add(1);
+                }
+                root.search_text.clear();
                 root.tab = tab;
                 root.page = None;
                 match tab {
@@ -802,51 +1002,54 @@ impl Root {
                 }
                 cx.notify();
             }));
-            nav = nav.child(button);
+            let button_el: gpui::AnyElement = if animating {
+                button
+                    .with_animation(
+                        gpui::SharedString::from(format!("nav-tab-{generation}-{label}")),
+                        Animation::new(Duration::from_millis(220)).with_easing(spring),
+                        move |el, delta| {
+                            let p = if selected { delta } else { 1.0 - delta };
+                            el.text_color(mix(theme.text, theme.on_accent, p))
+                        },
+                    )
+                    .into_any_element()
+            } else {
+                button.into_any_element()
+            };
+            let cell = Rc::new(Cell::new(Bounds::default()));
+            self.nav_tab_bounds.insert(tab, cell.clone());
+            let outer = div()
+                .relative()
+                .h(px(36.0))
+                .overflow_hidden()
+                .child(button_el)
+                .child(canvas(move |bounds, _, _| cell.set(bounds), |_, _, _, _| {}).absolute().inset_0());
+            if self.search_generation > 0 {
+                let target = if open { 36.0 } else { 96.0 };
+                let from = if open { 96.0 } else { 36.0 };
+                nav = nav.child(
+                    outer
+                        .with_animation(
+                            gpui::SharedString::from(format!("search-tab-{}-{label}", self.search_generation)),
+                            Animation::new(Duration::from_millis(220)).with_easing(spring),
+                            move |el, delta| el.w(px(from + (target - from) * delta)),
+                        )
+                        .into_any_element(),
+                );
+            } else {
+                nav = nav.child(outer.w(px(if open { 36.0 } else { 96.0 })));
+            }
         }
 
         let search_button = icon_button(assets::SEARCH, 18.0, theme.text, theme.surface_hover).on_mouse_down(gpui::MouseButton::Left, press(cx, |root, _, _, cx| {
-            root.search_open = !root.search_open;
-            cx.notify();
+            root.set_search_open(!root.search_open, cx);
         }));
-
-        let mut search = if self.search_open {
-            let theme = self.theme;
-            let value = self.search_text.clone();
-            Some(
-                div()
-                    .id("search-field")
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .w(px(340.0))
-                    .px_3()
-                    .py_2()
-                    .ml_2()
-                    .bg(theme.surface)
-                    .border_1()
-                    .border_color(theme.border)
-                    .child(svg().path(assets::SEARCH).size(px(15.0)).text_color(theme.muted))
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .text_sm()
-                            .text_color(if value.is_empty() { theme.muted } else { theme.text })
-                            .child(if value.is_empty() { "Search songs, albums, artists".to_owned() } else { value }),
-                    )
-                    .child(div().w(px(1.5)).h(px(16.0)).bg(theme.text)),
-            )
-        } else {
-            None
-        };
 
         let left = div()
             .flex()
             .items_center()
             .flex_1()
-            .child(search_button)
-            .when_some(search.take(), |el, field| el.child(field));
+            .child(search_button);
 
         let right = div()
             .flex()
@@ -889,10 +1092,16 @@ impl Root {
         let key = event.keystroke.key.as_str();
         match key {
             "escape" => {
-                self.search_open = false;
+                self.search_text.clear();
+                self.set_search_open(false, cx);
                 self.root_focus.focus(window);
             }
             "enter" => {
+                if self.scoped_search() {
+                    self.set_search_open(false, cx);
+                    self.root_focus.focus(window);
+                    return;
+                }
                 let query = self.search_text.trim().to_owned();
                 if query.len() >= 2 {
                     self.search_text.clear();
@@ -938,14 +1147,8 @@ impl Root {
         }
         let command = event.keystroke.modifiers.control || event.keystroke.modifiers.platform;
         match key {
-            "/" => {
-                self.search_open = true;
-                cx.notify();
-            }
-            "f" if command => {
-                self.search_open = true;
-                cx.notify();
-            }
+            "/" => self.set_search_open(true, cx),
+            "f" if command => self.set_search_open(true, cx),
             "," => {
                 if self.settings_open {
                     self.close_settings(cx);
@@ -956,6 +1159,8 @@ impl Root {
             "escape" => {
                 if self.settings_open {
                     self.settings_open = false;
+                } else if !self.search_text.is_empty() && self.scoped_search() {
+                    self.search_text.clear();
                 } else if self.expanded {
                     self.close_expanded(cx);
                 } else if self.queue_open {
@@ -967,6 +1172,10 @@ impl Root {
             }
             "q" => self.toggle_queue(cx),
             "e" => self.toggle_expanded(cx),
+            "l" if self.expanded => {
+                self.expanded_lyrics = !self.expanded_lyrics;
+                cx.notify();
+            }
             " " => {
                 self.backend.player.toggle_play();
                 cx.notify();
@@ -993,6 +1202,17 @@ impl Render for Root {
                 Tab::Explore => pages::explore(self, cx),
             },
         };
+        let content = if self.tab_generation == 0 && self.lib_generation == 0 {
+            content
+        } else {
+            let key = gpui::SharedString::from(format!("page-{}-{}", self.tab_generation, self.lib_generation));
+            let slide = self.content_slide;
+            div()
+                .size_full()
+                .child(content)
+                .with_animation(key, Animation::new(Duration::from_millis(240)).with_easing(spring), move |el, delta| el.left(px(slide * (1.0 - delta) * 32.0)))
+                .into_any_element()
+        };
 
         let mut root = div()
             .flex()
@@ -1012,6 +1232,10 @@ impl Render for Root {
         root = root.child(player_bar::bar(self, window, cx));
         if self.expanded || self.expanded_closing {
             root = root.child(player_bar::expanded(self, cx));
+        }
+        let morphing = !self.expanded_lyrics && (self.expanded_closing || (self.expanded && self.compact_bar_anim));
+        if morphing {
+            root = root.child(player_bar::controls_morph(self, cx));
         }
         if self.settings_open {
             root = root.child(settings::panel(self, cx));
@@ -1033,12 +1257,57 @@ impl Render for Root {
     }
 }
 
+fn tab_order(tab: Tab) -> i32 {
+    match tab {
+        Tab::Home => 0,
+        Tab::Library => 1,
+        Tab::Explore => 2,
+    }
+}
+
+pub fn lib_order(tab: LibraryTab) -> i32 {
+    match tab {
+        LibraryTab::Playlists => 0,
+        LibraryTab::Albums => 1,
+        LibraryTab::Artists => 2,
+        LibraryTab::History => 3,
+    }
+}
+
+pub fn mix(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let t = t.clamp(0.0, 1.0);
+    Rgba { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t, a: a.a + (b.a - a.a) * t }
+}
+
 pub fn spring(delta: f32) -> f32 {
     if delta >= 1.0 {
         return 1.0;
     }
     let t = delta.max(0.0);
     (1.0 - (-6.0 * t).exp() * (1.0 + 6.0 * t)).clamp(0.0, 1.0)
+}
+
+fn system_dark_preference() -> Option<bool> {
+    let connection = gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>).ok()?;
+    let reply = connection
+        .call_sync(
+            Some("org.freedesktop.portal.Desktop"),
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Settings",
+            "Read",
+            Some(&("org.freedesktop.appearance", "color-scheme").to_variant()),
+            None,
+            gio::DBusCallFlags::NONE,
+            500,
+            None::<&gio::Cancellable>,
+        )
+        .ok()?;
+    let (scheme,) = reply.get::<(glib::Variant,)>()?;
+    match scheme.get::<u32>()? {
+        1 => Some(true),
+        2 => Some(false),
+        _ => None,
+    }
 }
 
 fn system_font() -> gpui::SharedString {
@@ -1064,8 +1333,20 @@ pub fn press<T: 'static>(
     })
 }
 
-pub fn scroll_area(root: &mut Root, id: &'static str, content: Div, cx: &mut Context<Root>) -> gpui::AnyElement {
+fn scroll_impl(
+    root: &mut Root,
+    id: &'static str,
+    known_height: Option<f32>,
+    make_content: impl FnOnce(&mut Root, f32, &mut Context<Root>) -> Div,
+    cx: &mut Context<Root>,
+) -> gpui::AnyElement {
+    let theme = root.theme;
     let metrics = root.scroll_metrics.entry(id).or_insert_with(|| Rc::new(Cell::new((0.0, 0.0)))).clone();
+    let bar_bounds = root.scrollbar_bounds.entry(id).or_insert_with(|| Rc::new(Cell::new(Bounds::default()))).clone();
+    if let Some(total) = known_height {
+        let (_, viewport_height) = metrics.get();
+        metrics.set((total, viewport_height));
+    }
     let max = {
         let (content_height, viewport_height) = metrics.get();
         (content_height - viewport_height).max(0.0)
@@ -1075,9 +1356,102 @@ pub fn scroll_area(root: &mut Root, id: &'static str, content: Div, cx: &mut Con
         *current = max;
     }
     let current = *current;
+    let content = make_content(root, current, cx);
+    let measured = known_height.is_none();
+    let (content_height, viewport_height) = metrics.get();
+    let recently = root.scroll_activity.get(id).is_some_and(|at| at.elapsed() < Duration::from_millis(1100));
+    let hovered = root.scroll_hover.contains(id);
+    let show_bar = max > 0.0 && (recently || hovered);
+    let thumb_height = if content_height > 0.0 { (viewport_height * viewport_height / content_height).max(36.0).min(viewport_height) } else { 0.0 };
+    let thumb_top = if max > 0.0 { (current / max) * (viewport_height - thumb_height).max(0.0) } else { 0.0 };
+    let thumb_color = gpui::Rgba { a: if hovered { 0.82 } else { 0.42 }, ..theme.muted };
     let wheel_metrics = metrics.clone();
     let content_metrics = metrics.clone();
     let viewport_metrics = metrics.clone();
+    let drag_metrics_down = metrics.clone();
+    let drag_bounds_down = bar_bounds.clone();
+    let drag_metrics_move = metrics.clone();
+    let drag_bounds_move = bar_bounds.clone();
+    let mut rail = div()
+        .id(gpui::SharedString::from(format!("scroll-rail-{id}")))
+        .absolute()
+        .top_0()
+        .right_0()
+        .bottom_0()
+        .w(px(12.0))
+        .on_hover(cx.listener(move |root, hovered: &bool, _, cx| {
+            let changed = if *hovered { root.scroll_hover.insert(id) } else { root.scroll_hover.remove(&id) };
+            if changed {
+                cx.notify();
+            }
+        }))
+        .on_mouse_down(gpui::MouseButton::Left, cx.listener(move |root, event: &gpui::MouseDownEvent, _, cx| {
+            let bounds = drag_bounds_down.get();
+            let height: f32 = bounds.size.height.into();
+            if height <= 0.0 {
+                return;
+            }
+            let (content_height, viewport_height) = drag_metrics_down.get();
+            let max = (content_height - viewport_height).max(0.0);
+            let y: f32 = (event.position.y - bounds.origin.y).into();
+            let value = (y / height).clamp(0.0, 1.0) * max;
+            root.scroll_targets.insert(id, value);
+            root.scroll_offsets.insert(id, value);
+            root.start_scroll(id, cx);
+            cx.notify();
+        }))
+        .on_mouse_move(cx.listener(move |root, event: &gpui::MouseMoveEvent, _, cx| {
+            if event.pressed_button != Some(gpui::MouseButton::Left) {
+                return;
+            }
+            let bounds = drag_bounds_move.get();
+            let height: f32 = bounds.size.height.into();
+            if height <= 0.0 {
+                return;
+            }
+            let (content_height, viewport_height) = drag_metrics_move.get();
+            let max = (content_height - viewport_height).max(0.0);
+            let y: f32 = (event.position.y - bounds.origin.y).into();
+            let value = (y / height).clamp(0.0, 1.0) * max;
+            root.scroll_targets.insert(id, value);
+            root.scroll_offsets.insert(id, value);
+            root.start_scroll(id, cx);
+            cx.notify();
+        }))
+        .child(canvas(
+            move |bounds, _, _| {
+                bar_bounds.set(bounds);
+            },
+            |_, _, _, _| {},
+        ).absolute().inset_0());
+    if show_bar {
+        rail = rail.child(
+            div()
+                .absolute()
+                .right(px(3.0))
+                .top(px(thumb_top))
+                .w(px(6.0))
+                .h(px(thumb_height))
+                .bg(thumb_color),
+        );
+    }
+    let mut column = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .relative()
+        .top(px(-current))
+        .child(content);
+    if measured {
+        column = column.child(canvas(
+            move |bounds, _, _| {
+                let (_, viewport_height) = content_metrics.get();
+                let height: f32 = bounds.size.height.into();
+                content_metrics.set((height, viewport_height));
+            },
+            |_, _, _, _| {},
+        ).absolute().inset_0());
+    }
     div()
         .id(gpui::SharedString::from(format!("smooth-scroll-{id}")))
         .relative()
@@ -1092,25 +1466,10 @@ pub fn scroll_area(root: &mut Root, id: &'static str, content: Div, cx: &mut Con
             let target = root.scroll_targets.entry(id).or_insert(0.0);
             *target = (*target - dy * 2.4).clamp(0.0, max);
             cx.stop_propagation();
-            root.start_scroll(cx);
+            root.start_scroll(id, cx);
+            cx.notify();
         }))
-        .child(
-            div()
-                .flex()
-                .flex_col()
-                .w_full()
-                .relative()
-                .top(px(-current))
-                .child(content)
-                .child(canvas(
-                    move |bounds, _, _| {
-                        let (_, viewport_height) = content_metrics.get();
-                        let height: f32 = bounds.size.height.into();
-                        content_metrics.set((height, viewport_height));
-                    },
-                    |_, _, _, _| {},
-                ).absolute().inset_0()),
-        )
+        .child(column)
         .child(canvas(
             move |bounds, _, _| {
                 let (content_height, _) = viewport_metrics.get();
@@ -1119,9 +1478,54 @@ pub fn scroll_area(root: &mut Root, id: &'static str, content: Div, cx: &mut Con
             },
             |_, _, _, _| {},
         ).absolute().inset_0())
+        .child(rail)
         .into_any_element()
 }
 
+pub fn scroll_area(root: &mut Root, id: &'static str, content: Div, cx: &mut Context<Root>) -> gpui::AnyElement {
+    scroll_impl(root, id, None, move |_, _, _| content, cx)
+}
+
+pub fn virtual_list(
+    root: &mut Root,
+    id: &'static str,
+    count: usize,
+    row_height: f32,
+    pad_top: f32,
+    pad_bottom: f32,
+    cx: &mut Context<Root>,
+    build: impl FnOnce(&mut Root, std::ops::Range<usize>, &mut Context<Root>) -> Div,
+) -> gpui::AnyElement {
+    let total = pad_top + count as f32 * row_height + pad_bottom;
+    let metrics = root.scroll_metrics.entry(id).or_insert_with(|| Rc::new(Cell::new((0.0, 0.0)))).clone();
+    let (_, stored_viewport) = metrics.get();
+    let viewport = if stored_viewport > 0.0 { stored_viewport } else { root.viewport_height.max(240.0) };
+    let overscan = 5usize;
+    let visible_rows = (viewport / row_height).ceil() as usize + overscan * 2 + 2;
+    scroll_impl(root, id, Some(total), move |root, offset, cx| {
+        let first = ((offset - overscan as f32 * row_height).max(0.0) / row_height).floor() as usize;
+        let start = first.min(count);
+        let end = (start + visible_rows).min(count);
+        let mut list = div().flex().flex_col().w_full();
+        let top = pad_top + start as f32 * row_height;
+        if top > 0.0 {
+            list = list.child(div().h(px(top)).flex_shrink_0());
+        }
+        if start < end {
+            list = list.child(build(root, start..end, cx));
+        }
+        let bottom = (count - end) as f32 * row_height + pad_bottom;
+        if bottom > 0.0 {
+            list = list.child(div().h(px(bottom)).flex_shrink_0());
+        }
+        list
+    }, cx)
+}
+
+pub fn slide_ease(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
 pub fn icon_button(path: &'static str, size: f32, color: gpui::Rgba, hover: gpui::Rgba) -> Div {
     div()
         .flex()
@@ -1197,3 +1601,4 @@ pub fn heading(theme: Theme, title: &str, icon_path: Option<&'static str>) -> Di
     }
     row.child(title.to_owned())
 }
+
